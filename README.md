@@ -1,2 +1,2 @@
 # EcoSphere-Coordinated-AI-Interview-Panel
-## Contributers: Sakshi, Harsg
+## Contributers: Sakshi, Harsh
