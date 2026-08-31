@@ -29,7 +29,12 @@ log = logging.getLogger("gateway")
 
 app = FastAPI(title="EchoSphere Panel Gateway", docs_url=None, redoc_url=None)
 
-VALID_ROLES = {"technical", "product", "behavioural"}
+def _valid_roles() -> set[str]:
+    """Read from personas.yaml so a new persona is immediately routable —
+    a hardcoded set here 404s the very agent we just joined."""
+    from src.conductor.personas import all_roles
+
+    return set(all_roles())
 
 
 @app.get("/health")
@@ -42,6 +47,71 @@ async def health():
         "panel_size": config.PANEL_SIZE,
         "silence_mode": config.SILENCE_MODE,
     }
+
+
+@app.post("/session/{session_id}/setup")
+async def setup(session_id: str, request: Request):
+    """Prepare an interview from a job advert and a resume.
+
+    Called once before the agents join. Everything expensive happens here,
+    where nobody is waiting — generating questions mid-conversation would add
+    seconds to a live turn, and conversational quality is scored.
+    """
+    from src.conductor.personas import all_roles
+    from src.intake.plan import setup_session
+    from src.state.session import reset_session
+
+    body = await request.json()
+    session = reset_session(session_id)
+
+    # The panel is chosen per interview and must live on the session — the
+    # conductor runs in this process and would otherwise never hand the floor
+    # to a persona the caller asked for.
+    requested = [r.strip() for r in (body.get("roles") or []) if r.strip()]
+    if requested:
+        known = all_roles()
+        unknown = [r for r in requested if r not in known]
+        if unknown:
+            raise HTTPException(400, f"unknown roles {unknown}; available {known}")
+        session.roles = requested
+        session.floor_holder = requested[0]
+    result = setup_session(
+        session,
+        job_title=body.get("job_title", ""),
+        job_description=body.get("job_description", ""),
+        topics=body.get("topics") or [],
+        resume_text=body.get("resume_text", ""),
+        candidate_name=body.get("candidate_name", ""),
+        per_role=int(body.get("per_role", 4)),
+        roles=body.get("roles") or None,
+    )
+    result["roles"] = session.roles or None
+    log.info(
+        "session %s prepared: %d questions, personalised=%s, panel=%s",
+        session_id, result["planned"], result["personalised"],
+        session.roles or "(default)",
+    )
+    return result
+
+
+@app.get("/session/{session_id}/state")
+async def state(session_id: str):
+    """What the recruiter dashboard renders, and the quickest way to see
+    whether the panel is behaving during a live test."""
+    from src.state.session import get_session
+
+    s = get_session(session_id)
+    snap = s.snapshot()
+    snap["plan"] = [
+        {"role": q.role, "difficulty": q.difficulty, "topic": q.topic,
+         "text": q.text, "asked": q.asked}
+        for q in s.plan
+    ]
+    snap["transcript"] = [
+        {"turn_id": t.turn_id, "speaker": t.speaker, "text": t.text}
+        for t in s.turns.all()
+    ]
+    return snap
 
 
 @app.post("/v1/{session_id}/{role}/chat/completions")
@@ -61,7 +131,7 @@ async def chat_completions(
             log.warning("rejected %s/%s — bad or missing bearer token", session_id, role)
             raise HTTPException(status_code=401, detail="unauthorized")
 
-    if role not in VALID_ROLES:
+    if role not in _valid_roles():
         raise HTTPException(status_code=404, detail=f"unknown role {role!r}")
 
     try:

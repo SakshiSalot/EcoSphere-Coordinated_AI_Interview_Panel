@@ -12,11 +12,14 @@ fields, which small models do freely when the schema permits it.
 import json
 import logging
 
+from src.conductor.personas import all_roles
 from src.state.session import SessionState
 
 log = logging.getLogger("tools")
 
-ROLES = ["technical", "product", "behavioural"]
+# Every persona that exists, so adding one to personas.yaml immediately makes
+# it a valid handoff target with no code change.
+ROLES = all_roles()
 
 
 def _fn(name: str, description: str, properties: dict, required: list[str]) -> dict:

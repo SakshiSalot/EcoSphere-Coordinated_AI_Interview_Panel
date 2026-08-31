@@ -254,6 +254,98 @@ def test_difficulty_both_directions() -> None:
           session2.difficulty == "medium", session2.difficulty)
 
 
+def test_question_plan() -> None:
+    """The plan must steer coverage without being consumed by follow-ups."""
+    print("\n\033[1mthe question plan\033[0m")
+    from src.conductor.turn import asked_planned
+    from src.state.models import PlannedQuestion
+
+    session = reset_session("t-plan")
+    session.plan = [
+        PlannedQuestion(role="technical", text="How did you choose the shard key?",
+                        difficulty="easy", topic="sharding"),
+        PlannedQuestion(role="technical", text="What happens when one tenant outgrows a shard?",
+                        difficulty="hard", topic="sharding"),
+    ]
+
+    session.difficulty = "hard"
+    q = session.next_question_for("technical")
+    check("the next question matches the current difficulty",
+          q is not None and q.difficulty == "hard", q.difficulty if q else "none")
+
+    session.difficulty = "easy"
+    q = session.next_question_for("technical")
+    check("and follows the ladder back down",
+          q is not None and q.difficulty == "easy", q.difficulty if q else "none")
+
+    planned = "How did you choose the shard key?"
+    check("a rephrasing still counts as asked",
+          asked_planned(planned, "Talk me through choosing that shard key."))
+    check("a follow-up does NOT consume the planned question",
+          not asked_planned(planned, "Interesting — and what did that cost you?"))
+
+    session.difficulty = "easy"
+    q = session.next_question_for("technical")
+    q.asked_turn_id = 1
+    nxt = session.next_question_for("technical")
+    check("an asked question is not offered again",
+          nxt is not None and nxt.text != q.text)
+
+
+def test_repeat_request() -> None:
+    """Asking to repeat is not an answer and must not be punished."""
+    print("\n\033[1masking the panel to repeat\033[0m")
+    from src.analysis import quick
+
+    session = reset_session("t-repeat")
+    history: list = []
+
+    _turn("t-repeat", history, "Sorry, could you repeat that?")
+    _turn("t-repeat", history, "Right — we sharded Postgres by tenant id.")
+
+    check("a repeat request is recognised as a meta request",
+          quick.meta_request("Sorry, could you repeat that?") == "repeat")
+    check("a real answer is not mistaken for one",
+          quick.meta_request(STRONG_NO_BUSINESS) is None)
+    check("a repeat request is NOT flagged vague",
+          not session.flags.turns_of_kind("vague"),
+          str(session.flags.turns_of_kind("vague")))
+    check("a repeat request does not move the difficulty",
+          session.difficulty == "medium" and session.ewma == 0.5,
+          f"{session.difficulty} ewma={session.ewma}")
+
+
+def test_interview_ends() -> None:
+    """The panel must say goodbye rather than simply going quiet."""
+    print("\n\033[1mthe interview ends\033[0m")
+    from src.conductor.turn import closing
+
+    session = reset_session("t-end")
+    session.roles = ["technical", "product"]
+    # _turn records the PREVIOUS answer before the persona speaks, so after
+    # three calls the gateway has consumed two answers.
+    session.max_turns = 2
+    history: list = []
+
+    for i in range(3):
+        _turn("t-end", history, f"Answer number {i} about Postgres sharding at scale.")
+
+    check("the panel closed the interview itself", session.closed,
+          f"{len(session.turns.by_speaker('candidate'))} answers recorded")
+
+    said = closing(session, "technical")
+    check("the closing names the end", "end of the interview" in said.lower())
+    check("the closing mentions the written assessment",
+          "assessment" in said.lower())
+    check("the closing says goodbye", "goodbye" in said.lower())
+
+    # Once closed, every persona is silent — the interview is over and the
+    # script tears the agents down.
+    spoke = [r for r in active_roles()
+             if next_utterance("t-end", r, history) is not None]
+    check("after closing, nobody speaks again", not spoke, str(spoke))
+
+
 def test_shared_context() -> None:
     print("\n\033[1mshared memory across personas\033[0m")
     session = reset_session("t-shared")
@@ -280,6 +372,9 @@ def main() -> int:
     test_vague_holds_floor()
     test_contradiction_routing()
     test_difficulty_both_directions()
+    test_question_plan()
+    test_repeat_request()
+    test_interview_ends()
     test_shared_context()
 
     print("\n" + "─" * 70)

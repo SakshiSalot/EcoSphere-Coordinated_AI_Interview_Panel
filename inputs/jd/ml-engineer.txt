@@ -1,0 +1,21 @@
+Machine Learning Engineer (New Grad / Early Career) — Applied AI
+Vadodara / Remote
+
+You will ship ML systems that run in production, not notebooks. The team owns
+retrieval-augmented generation for internal document search, plus a set of
+classical models for forecasting.
+
+Requirements
+- Strong Python. Comfortable with PyTorch or TensorFlow.
+- Practical experience training AND evaluating models — not just training.
+- Retrieval systems: embeddings, vector stores, chunking, re-ranking.
+- Able to reason about model failure modes and evaluation design.
+- Ships things end to end; can stand up a small web app around a model.
+
+Nice to have
+- Reinforcement learning exposure.
+- Computer vision.
+- Experience with LLM evaluation or human feedback pipelines.
+
+You will be expected to own an evaluation harness within your first quarter,
+and to explain model behaviour to non-technical stakeholders.

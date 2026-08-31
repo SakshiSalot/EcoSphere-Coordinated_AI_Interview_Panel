@@ -38,6 +38,9 @@ GATEWAY_PUBLIC_URL = os.getenv("GATEWAY_PUBLIC_URL", "").rstrip("/")
 
 # --- Panel ---
 PANEL_SIZE = int(os.getenv("PANEL_SIZE", "2"))
+# Explicit panel by role name, e.g. "technical,hiring_manager,customer".
+# Overrides PANEL_SIZE when set.
+PANEL_ROLES = os.getenv("PANEL_ROLES", "").strip()
 SILENCE_MODE = os.getenv("SILENCE_MODE", "empty_completion").strip()
 
 PERSONAS_FILE = ROOT / "src" / "conductor" / "personas.yaml"

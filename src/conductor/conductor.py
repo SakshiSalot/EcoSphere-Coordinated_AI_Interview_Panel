@@ -43,7 +43,7 @@ def decide_floor(session: SessionState) -> tuple[str, str]:
                           judge sees a panel rather than one bot with two
                           silent extras.
     """
-    roles = active_roles()
+    roles = session.roles or active_roles()
     current = session.floor_holder if session.floor_holder in roles else roles[0]
 
     # 1 — a role-play owns the floor until it completes

@@ -6,10 +6,11 @@ makes the harness a real test rather than a parallel implementation.
 
 import json
 import logging
+import re
 
 from src.analysis import quick
 from src.conductor import difficulty
-from src.conductor.personas import persona, persona_prompt
+from src.conductor.personas import disclosure, persona, persona_prompt
 from src.conductor.tools import TOOL_SCHEMAS, handle_tool_call
 from src.gateway import providers
 from src.state.session import SessionState
@@ -72,13 +73,102 @@ CANNED = {
 }
 
 
+# Words too common to signal that two questions are about the same thing.
+_STOP = {
+    "about", "there", "their", "would", "could", "should", "which", "where",
+    "what", "when", "that", "this", "with", "from", "your", "have", "they",
+    "them", "then", "than", "into", "some", "more", "much", "make", "made",
+    "tell", "walk", "through", "much", "does", "just", "like", "been", "were",
+    "using", "used", "also", "very", "many", "most", "such", "each", "other",
+}
+
+
+def _content_words(text: str) -> set[str]:
+    import re
+
+    return {
+        w for w in re.findall(r"[a-z0-9]+", text.lower())
+        if len(w) > 3 and w not in _STOP
+    }
+
+
+def asked_planned(planned: str, said: str, threshold: float = 0.4) -> bool:
+    """Did this utterance actually ask the planned question?
+
+    Compared on shared content words rather than exact text, because the
+    persona rephrases in its own voice — which is the point. The plan steers
+    coverage; the wording belongs to the model.
+    """
+    want = _content_words(planned)
+    if not want:
+        return False
+    return len(want & _content_words(said)) / len(want) >= threshold
+
+
+def _is_opening(session: SessionState) -> bool:
+    """True if no persona has spoken yet in this session."""
+    return not any(not t.is_candidate for t in session.turns.all())
+
+
+_BULLET = re.compile(r"(?m)^\s*(?:[-*•]|\d+[.)])\s+")
+_EMPHASIS = re.compile(r"(\*\*|__|\*|_|`)")
+_HEADING = re.compile(r"(?m)^#{1,6}\s*")
+
+
+def spoken(text: str) -> str:
+    """Strip anything that is written rather than said.
+
+    Every prompt says "spoken, not written", and models still return numbered
+    lists when asked to restate something. Text-to-speech reads "1." aloud as
+    "one dot", so a single stray list marker is audible and makes the panel
+    sound broken. Cheaper to strip it here than to keep re-prompting.
+    """
+    t = _HEADING.sub("", text)
+    t = _BULLET.sub("", t)
+    t = _EMPHASIS.sub("", t)
+    return " ".join(t.split())
+
+
+def closing(session: SessionState, role: str) -> str:
+    """What the candidate hears at the end.
+
+    Templated rather than generated. This is the last thing they hear and the
+    only signal the interview is over — a model improvising here could ask one
+    more question instead, which is exactly the failure it is meant to fix.
+    """
+    p = persona(role)
+    others = [r for r in (session.roles or [role]) if r != role]
+    thanks = ""
+    if others:
+        names = [persona(r)["name"] for r in others]
+        joined = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+        thanks = f" {joined} and I have everything we need."
+    return (
+        f"That brings us to the end of the interview.{thanks} "
+        f"Thank you for your time today — your written assessment will follow, "
+        f"with the specific points each of us picked up on. "
+        f"This is {p['name']}, signing off. Goodbye."
+    )
+
+
 def speak(session: SessionState, role: str) -> tuple[str, list[tuple[str, str]]]:
     """Generate what `role` says this turn, and apply any tools it called."""
+    opening = _is_opening(session)
+
     if not providers.available():
         asked = session.turns.count_asked_by(role)
         bank = CANNED[role]
         log.warning("no model configured — using canned %s question %d", role, asked + 1)
-        return bank[min(asked, len(bank) - 1)], []
+        text = bank[min(asked, len(bank) - 1)]
+        return spoken(disclosure(role) + text if opening else text), []
+
+    # --- the interview has run its course -------------------------------
+    if session.closed:
+        return "", []
+    if session.should_close():
+        session.closed = True
+        log.info("interview closing on %s", role)
+        return closing(session, role), []
 
     system = persona_prompt(
         role,
@@ -88,11 +178,36 @@ def speak(session: SessionState, role: str) -> tuple[str, list[tuple[str, str]]]
 
     extra: list[str] = []
 
-    planned = session.next_question_for(role)
-    if planned and not session.turns.all():
-        extra.append(f"Open the interview with this question: {planned.text}")
-    elif planned:
-        extra.append(f"If it is time for a new question, ask this one: {planned.text}")
+    # --- the candidate asked us to repeat, not for a new question -------
+    meta = session.pending_meta
+    session.pending_meta = None
+    planned = None
+
+    if meta:
+        mine = session.turns.by_speaker(role)
+        last_q = mine[-1].text if mine else ""
+        instruction = {
+            "repeat": "The candidate did not hear you and asked you to repeat. "
+                      "Say the SAME question again, a little more slowly and in "
+                      "simpler words. Do NOT ask a different question. This is "
+                      "spoken aloud — one flowing sentence or two, never a list.",
+            "clarify": "The candidate did not understand and asked you to "
+                       "clarify. Explain what you meant and restate the SAME "
+                       "question. Do NOT move on to a new one.",
+            "pause": "The candidate asked for a moment to think. Say something "
+                     "brief and reassuring. Do NOT ask anything new.",
+        }[meta]
+        if last_q:
+            instruction += f'\n\nThe question you asked was: "{last_q}"'
+        extra.append(instruction)
+    else:
+        planned = session.next_question_for(role)
+        if planned and not session.turns.all():
+            extra.append(f"Open the interview with this question: {planned.text}")
+        elif planned:
+            extra.append(
+                f"If it is time for a new question, ask this one: {planned.text}"
+            )
 
     if session.directive:
         extra.append(f"The recruiter watching has asked you to: {session.directive}")
@@ -144,10 +259,24 @@ def speak(session: SessionState, role: str) -> tuple[str, list[tuple[str, str]]]
             temperature=0.6,
         )
 
+    text = spoken(text)
+
+    # PS11 capability 11 — unconditional, because Agora's greeting_message
+    # was ignored in testing and the disclosure never reached the candidate.
+    if opening and text:
+        text = disclosure(role) + text
+
     log.info("%s spoke via %s (%d tool calls)", role, provider, len(calls))
 
-    if planned and text:
+    # Mark the planned question used ONLY if the persona actually asked it.
+    #
+    # Previously this fired whenever the persona said anything, so a
+    # follow-up silently consumed a planned question. Over an interview the
+    # whole personalised plan drained away while the panel improvised — the
+    # questions were generated, counted, and never asked.
+    if planned and text and asked_planned(planned.text, text):
         planned.asked_turn_id = len(session.turns) + 1
+        log.info("planned question asked (%s / %s)", role, planned.topic)
 
     return text, calls
 
@@ -159,6 +288,16 @@ def observe(session: SessionState, turn_id: int, text: str) -> float:
     model-based scoring runs separately and off the critical path, and its
     results land in time for the turn after next.
     """
+    # "Sorry, could you repeat that?" is not an answer. Scoring it as one is a
+    # silent unfairness: it trips the vagueness check, drops the difficulty,
+    # and after two of them the interviewer starts pinning down a candidate
+    # whose only failing was not hearing the question.
+    meta = quick.meta_request(text)
+    if meta:
+        session.pending_meta = meta
+        log.info("turn %d is a %s request, not an answer", turn_id, meta)
+        return session.ewma
+
     vague, why, quote = quick.is_vague(text)
     if vague:
         session.flags.add(turn_id, "vague", why, quote)

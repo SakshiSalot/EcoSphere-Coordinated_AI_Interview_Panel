@@ -37,6 +37,43 @@ BUSINESS_HINTS = [
 ]
 
 
+# Things a candidate says that are NOT answers. Scoring these as answers is a
+# silent unfairness: "sorry, could you repeat that?" is nine words with no
+# numbers, so the vagueness check flags it, the difficulty ladder drops, and
+# after two of them the interviewer starts pinning down a candidate whose only
+# crime was not hearing the question.
+_REPEAT = [
+    "repeat that", "repeat the question", "say that again", "come again",
+    "didn't catch", "did not catch", "sorry, what", "sorry what", "pardon",
+    "what was the question", "can you repeat", "could you repeat",
+    "say it again", "one more time", "missed that", "didn't hear",
+    "did not hear", "run that by me",
+]
+_CLARIFY = [
+    "what do you mean", "not sure i understand", "can you clarify",
+    "could you clarify", "rephrase", "in what sense", "clarify that",
+    "i don't follow", "i do not follow",
+]
+_PAUSE = [
+    "one moment", "give me a second", "give me a moment", "hold on",
+    "let me think", "just a second", "bear with me",
+]
+
+
+def meta_request(text: str) -> str | None:
+    """Classify an utterance that is about the conversation, not an answer.
+
+    Returns "repeat", "clarify", "pause", or None.
+    """
+    t = _norm(text)
+    if len(t.split()) > 25:
+        return None  # a long turn is an answer, even if it contains "pardon"
+    for phrases, kind in ((_REPEAT, "repeat"), (_CLARIFY, "clarify"), (_PAUSE, "pause")):
+        if any(p in t for p in phrases):
+            return kind
+    return None
+
+
 def _norm(text: str) -> str:
     return " ".join(text.lower().split())
 

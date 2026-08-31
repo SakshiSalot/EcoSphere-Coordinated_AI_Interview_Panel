@@ -24,6 +24,12 @@ from src.state.models import AnswerScore, CandidateProfile, JobSpec, PlannedQues
 class SessionState:
     session_id: str
 
+    # --- who is on this panel ---
+    # Per session, not global: the gateway serves many interviews at once and
+    # they may have different panels. Empty means fall back to the configured
+    # default.
+    roles: list[str] = field(default_factory=list)
+
     # --- floor control ---
     floor_holder: str = "technical"
     pending_handoff: tuple[str, str] | None = None  # (to_role, reason)
@@ -61,6 +67,16 @@ class SessionState:
     # --- observer directives, consumed by the next turn ---
     directive: str | None = None
 
+    # --- conversation control ---
+    # Set when the candidate asks for a repeat rather than answering; consumed
+    # by the next utterance.
+    pending_meta: str | None = None
+
+    # An interview needs a defined end. Without one the panel simply stops
+    # speaking and the candidate is left wondering whether it broke.
+    closed: bool = False
+    max_turns: int = 14
+
     started_at: float = field(default_factory=time.time)
 
     # ------------------------------------------------------------------
@@ -68,11 +84,48 @@ class SessionState:
     def holds_floor(self, role: str) -> bool:
         return self.floor_holder == role
 
-    def next_question_for(self, role: str) -> PlannedQuestion | None:
-        for q in self.plan:
-            if q.role == role and not q.asked:
-                return q
-        return None
+    def next_question_for(
+        self, role: str, difficulty: str | None = None
+    ) -> PlannedQuestion | None:
+        """The next planned question for this persona, matched to how the
+        candidate is doing.
+
+        Questions are tagged easy/medium/hard at planning time. Handing out
+        the next one in list order would ignore that tag entirely — the panel
+        would claim to adapt while asking a fixed sequence, which is exactly
+        the fake-adaptation PS11 is testing for.
+        """
+        pending = [q for q in self.plan if q.role == role and not q.asked]
+        if not pending:
+            return None
+
+        want = difficulty or self.difficulty
+        bands = ["easy", "medium", "hard"]
+        if want not in bands:
+            return pending[0]
+
+        # Nearest band first, so a hard candidate never drops to easy just
+        # because no hard question is left.
+        i = bands.index(want)
+        for band in sorted(bands, key=lambda b: abs(bands.index(b) - i)):
+            match = [q for q in pending if q.difficulty == band]
+            if match:
+                return match[0]
+        return pending[0]
+
+    def should_close(self) -> bool:
+        """Is the interview finished?
+
+        Either every planned question has been asked, or we have hit the turn
+        cap. The cap matters even with a plan: a candidate who never lets the
+        panel reach a question would otherwise be interviewed forever.
+        """
+        answers = len(self.turns.by_speaker("candidate"))
+        if answers >= self.max_turns:
+            return True
+        if self.plan and all(q.asked for q in self.plan) and answers >= 2:
+            return True
+        return False
 
     def consecutive_vague(self) -> int:
         """Candidate turns in a row that were flagged vague.
@@ -174,6 +227,8 @@ class SessionState:
             "coding_round": self.coding_round,
             "active_scenario": self.active_scenario,
             "job_title": self.job.title,
+            "roles": self.roles,
+            "closed": self.closed,
         }
 
 

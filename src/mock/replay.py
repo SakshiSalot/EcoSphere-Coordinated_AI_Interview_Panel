@@ -106,6 +106,10 @@ def run(
 
         latencies.append((time.perf_counter() - started) * 1000)
 
+        if not spoke and session.closed:
+            print("\n  \033[32mthe panel closed the interview\033[0m")
+            break
+
         if len(spoke) != 1:
             raise OneSpeakerViolation(
                 f"{len(spoke)} personas tried to speak on turn "
@@ -116,6 +120,9 @@ def run(
         if not quiet:
             _say(role, said, session)
         history.append({"role": "assistant", "content": said})
+
+        if session.closed:
+            break
 
         try:
             answer = candidate.answer(said)

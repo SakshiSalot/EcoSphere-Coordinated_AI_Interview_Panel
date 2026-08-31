@@ -94,17 +94,17 @@ def _candidate_texts(messages: list) -> list[str]:
     return out
 
 
-def chunks(text: str, size: int = 48) -> list[str]:
-    """Split a reply into small pieces so speech starts before the sentence
-    is finished. Splits on word boundaries — a chunk that ends mid-word makes
-    the TTS mispronounce it."""
-    words, out, buf = text.split(), [], ""
-    for w in words:
-        if buf and len(buf) + len(w) + 1 > size:
-            out.append(buf + " ")
-            buf = w
-        else:
-            buf = f"{buf} {w}".strip()
-    if buf:
-        out.append(buf)
-    return out
+def chunks(text: str) -> list[str]:
+    """Emit the reply as a single delta.
+
+    Artificial chunking was actively harmful here. Agora appears to strip
+    whitespace at the edges of each delta, so splitting on word boundaries
+    concatenated to "real load.What broke first?" — the words ran together and
+    the TTS read them that way.
+
+    There was also nothing to gain: this path generates the whole reply before
+    returning, so slicing it up afterwards cannot make speech start any
+    earlier. Real chunks arrive with their own spacing once the streaming
+    path is wired, and that is where the latency win actually lives.
+    """
+    return [text] if text else []

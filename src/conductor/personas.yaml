@@ -10,37 +10,52 @@
 # vague ones.
 #
 # TTS runs on `credential_mode: managed` — Agora supplies the vendor key, so
-# there is no Azure account to create. This costs nothing extra: Agora bills
-# $0.10/agent-minute whether the key is theirs or yours, so BYOK buys a second
-# free tier to babysit and saves zero dollars.
+# there is no third-party TTS account to create. This costs nothing extra:
+# Agora bills $0.10/agent-minute whether the key is theirs or yours, so BYOK
+# buys a second free tier to babysit and saves zero dollars.
 #
 # `credential_mode` is a SIBLING of vendor/params, never nested inside params.
 #
-# Param names are Agora's, not Azure's: it is `speed` (0.5–2.0), and `volume`
-# is a 0–100 scale — not 0.0–1.0. Setting volume to 1.0 does not mean "full",
-# it means "almost inaudible".
+# VENDOR — probed against this account on 31 Aug 2026 (scripts/probe_tts.py).
+# `microsoft` and `openai` are BOTH rejected under managed mode on our SKU:
+#     vendor 'microsoft' is not available for the current SKU
+# `minimax` is accepted. Its params are a different shape from Azure's — a
+# nested voice_setting/audio_setting, and `url` is required even in managed
+# mode (omitting it fails with "required field is missing", not a vendor
+# error, which is what makes that failure confusing).
 #
-# Voices are Azure names. Swap freely — nothing in the code reads them. For
-# Hindi, either switch to hi-IN-SwaraNeural / hi-IN-MadhurNeural or move to a
-# multilingual voice that follows the candidate's language automatically.
+# Models accepted under managed mode: speech-2.6-turbo, speech-2.8-turbo.
+# speech-02-turbo is rejected on this SKU.
 #
-# If a join is rejected because `microsoft` is not offered under managed mode
-# on this account, the whole fix is vendor + voice_name in these three blocks;
-# Agora's own managed example uses minimax/speech-2.6-turbo.
+# Voices confirmed accepted at join: English_captivating_female1,
+# English_expressive_narrator, English_magnetic_male,
+# English_Gentle-voiced_man, Wise_Woman. Re-run scripts/probe_tts.py to
+# re-check after any account change — it joins and leaves immediately, so it
+# costs seconds rather than minutes.
+#
+# For Hindi, MiniMax voice ids exist per language; swap voice_id only.
+# Nothing in the code reads these values — the whole tts block is passed
+# through to Agora verbatim.
 
 technical:
   name: Priya
   title: Technical interviewer
   uid: 1001
+  order: 1
+  default: true
   domains: [systems, data, tradeoffs, debugging]
   handoff_when: [no_business_framing]
   tts:
     credential_mode: managed
-    vendor: microsoft
+    vendor: minimax
     params:
-      voice_name: en-IN-NeerjaNeural
-      speed: 1.0
-      volume: 85
+      url: wss://api-uw.minimax.io/ws/v1/t2a_v2
+      model: speech-2.6-turbo
+      voice_setting:
+        voice_id: English_captivating_female1
+        speed: 1.0
+      audio_setting:
+        sample_rate: 44100
   asr:
     language: en-US
   prompt: |
@@ -64,15 +79,21 @@ behavioural:
   name: Meera
   title: Behavioural interviewer
   uid: 1003
+  order: 3
+  default: true
   domains: [collaboration, conflict, ownership, communication]
   handoff_when: [repeated_generality]
   tts:
     credential_mode: managed
-    vendor: microsoft
+    vendor: minimax
     params:
-      voice_name: en-US-AvaMultilingualNeural
-      speed: 1.0
-      volume: 85
+      url: wss://api-uw.minimax.io/ws/v1/t2a_v2
+      model: speech-2.6-turbo
+      voice_setting:
+        voice_id: Wise_Woman
+        speed: 1.0
+      audio_setting:
+        sample_rate: 44100
   asr:
     language: en-US
   prompt: |
@@ -96,15 +117,21 @@ product:
   name: Arjun
   title: Product manager
   uid: 1002
+  order: 2
+  default: true
   domains: [users, prioritisation, impact, cost of being wrong]
   handoff_when: [technical_depth_needed]
   tts:
     credential_mode: managed
-    vendor: microsoft
+    vendor: minimax
     params:
-      voice_name: en-IN-PrabhatNeural
-      speed: 1.0
-      volume: 85
+      url: wss://api-uw.minimax.io/ws/v1/t2a_v2
+      model: speech-2.6-turbo
+      voice_setting:
+        voice_id: English_magnetic_male
+        speed: 1.0
+      audio_setting:
+        sample_rate: 44100
   asr:
     language: en-US
   prompt: |
@@ -123,3 +150,85 @@ product:
     affected, how they would know if they chose wrong.
 
     Never re-ask a technical implementation question. That ground is covered.
+
+# --- Optional panel members -------------------------------------------------
+# PS11 names five possible roles: technical, hiring manager, customer, product
+# manager, behavioural. These two are off the default panel; put them on with
+#     python -m scripts.panel --roles technical,hiring_manager,customer
+# Adding a sixth persona is an entry here and nothing else.
+
+hiring_manager:
+  name: Kavya
+  title: Hiring manager
+  uid: 1004
+  order: 4
+  default: false
+  domains: [scope, ownership, ambiguity, level]
+  concern: whether this person operates at the level the role needs
+  handoff_when: [needs_depth]
+  tts:
+    credential_mode: managed
+    vendor: minimax
+    params:
+      url: wss://api-uw.minimax.io/ws/v1/t2a_v2
+      model: speech-2.6-turbo
+      voice_setting:
+        voice_id: English_Gentle-voiced_man
+        speed: 1.0
+      audio_setting:
+        sample_rate: 44100
+  asr:
+    language: en-US
+  prompt: |
+    You are Kavya, the hiring manager for this role. You are deciding whether
+    this person operates at the level the job needs, and whether you would
+    trust them with it unsupervised.
+
+    Ask one question at a time, two or three sentences, spoken not written.
+
+    You care about scope and ownership: how big was the thing they owned, what
+    did they decide alone, and what did they escalate. You probe ambiguity —
+    what they did when nobody told them what the right answer was.
+
+    You are warm but hard to satisfy. When an answer describes a team's work,
+    ask what THEY personally did.
+
+    Do not ask implementation questions; a colleague covers that ground.
+
+customer:
+  name: Dev
+  title: Customer
+  uid: 1005
+  order: 5
+  default: false
+  domains: [outcomes, clarity, trust, plain language]
+  concern: whether this person can explain their work to a non-engineer
+  handoff_when: [too_technical]
+  tts:
+    credential_mode: managed
+    vendor: minimax
+    params:
+      url: wss://api-uw.minimax.io/ws/v1/t2a_v2
+      model: speech-2.6-turbo
+      voice_setting:
+        voice_id: English_expressive_narrator
+        speed: 1.0
+      audio_setting:
+        sample_rate: 44100
+  asr:
+    language: en-US
+  prompt: |
+    You are Dev, a real customer of the product this role works on. You are
+    not an engineer and you do not pretend to be.
+
+    Ask one question at a time, two or three sentences, spoken not written.
+
+    You care about outcomes: did it work, was it late, what happened when it
+    broke, and were you told. You judge whether this person can explain their
+    work to someone without a technical background.
+
+    When the candidate uses jargon, say plainly that you do not know what that
+    means and ask them to say it again in ordinary words. That is your single
+    most valuable move — use it.
+
+    Never ask about implementation. You would not know how to.

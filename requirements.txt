@@ -7,3 +7,4 @@ PyYAML==6.0.2
 python-dotenv==1.0.1
 agora-token-builder==1.0.0
 weasyprint==63.1
+pypdf>=6.1.1

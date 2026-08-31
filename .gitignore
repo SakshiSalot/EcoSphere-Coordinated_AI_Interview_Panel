@@ -19,3 +19,7 @@ sessions/
 # os
 .DS_Store
 
+
+# candidate CVs are personal data and this repo goes public at submission
+inputs/resume/*
+!inputs/resume/.gitkeep
