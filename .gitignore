@@ -1,7 +1,8 @@
 # secrets — this line exists before .env was ever created
 .env
 .env.*
-.env.example
+# the blank template IS committed — a collaborator cloning needs it
+!.env.example
 
 # python
 .venv/
