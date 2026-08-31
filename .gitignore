@@ -1,0 +1,20 @@
+# secrets — this line exists before .env was ever created
+.env
+.env.*
+!.env.example
+
+# python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# runtime artefacts
+out/
+sessions/
+*.log
+
+/docs
+
+# os
+.DS_Store
