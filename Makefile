@@ -1,4 +1,4 @@
-.PHONY: help check sim gateway gateway-live tunnel interview gate roles inputs stop kill status
+.PHONY: help check score demo demo-live sim gateway gateway-live tunnel interview gate roles inputs stop kill status
 
 PY := .venv/bin/python
 UVICORN := .venv/bin/uvicorn
@@ -12,12 +12,12 @@ ROLES  ?= technical,product
 TITLE  ?= Machine Learning Engineer
 NAME   ?= Candidate
 CHANNEL?= interview
+PERSONA?= strong
 
 help:
 	@echo ""
-	@echo "  FREE — no Agora minutes, no keys needed"
-	@echo "    make check         26 regression tests, under a second"
-	@echo "    make sim           full interview vs the AI candidate"
+	@echo "  FREE — no keys, no network, no minutes"
+	@echo "    make check         99 regression tests, under a minute"
 	@echo "    make roles         who can sit on the panel"
 	@echo "    make inputs        what is in inputs/"
 	@echo ""
@@ -25,6 +25,12 @@ help:
 	@echo "    make gateway       the gateway, auto-reloading (development)"
 	@echo "    make gateway-live  the gateway, no reload (use for live tests)"
 	@echo "    make tunnel        public HTTPS Agora can reach"
+	@echo ""
+	@echo "  NEEDS MODEL KEYS — still no Agora minutes"
+	@echo "    make sim           full interview vs the AI candidate"
+	@echo "    make demo          one interview marked end to end"
+	@echo "    make score         35 more marking checks, real judging (~2 min)"
+	@echo "    make demo-live     mark a live AI-candidate interview"
 	@echo ""
 	@echo "  COSTS AGORA MINUTES"
 	@echo "    make gate          one interviewer, prove interruption works"
@@ -38,8 +44,23 @@ help:
 
 # --- free ------------------------------------------------------------------
 
+# Both free suites: 35 conductor checks + 64 marking checks. Neither spends a
+# model call — the marking suite stubs the judge under --offline.
 check:
 	@$(PY) -m src.mock.offline
+	@$(PY) -m src.analysis.selftest --offline
+
+# The other 35 marking checks, which DO judge with a real model (~2 min).
+score:
+	@$(PY) -m src.analysis.selftest
+
+# One interview marked end to end: rubrics, evidence, allocation, assessment.
+demo:
+	@$(PY) -m src.analysis.demo
+
+# The same, but interviewing a live AI candidate instead of a fixed transcript.
+demo-live:
+	@$(PY) -m src.analysis.demo --live --persona $(PERSONA)
 
 sim:
 	@$(PY) -m src.mock.replay --turns 8 --persona strong

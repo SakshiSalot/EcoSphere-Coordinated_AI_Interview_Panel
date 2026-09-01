@@ -46,9 +46,11 @@ Candidate browser ──audio──▶ AGORA RTC CHANNEL ◀──audio── Pr
         └────────────────────────────────────────────────────┘
                                     │ fire-and-forget, never blocking
                                     ▼
-        ANALYSIS: score the answer against its rubric with quotes ·
-        detect vagueness · extract claims · check contradictions
-                          → feeds the NEXT turn
+        MARKING (Gemini, background thread, never blocking):
+        a rubric is generated the moment a question is ASKED — before the
+        answer exists, so it cannot be shaped by it — then the answer is
+        judged against it concept by concept, each with a verbatim quote
+                          → feeds the NEXT turn, and the final assessment
 ```
 
 That one fact gives us everything: several agents share one brain, the
@@ -93,13 +95,18 @@ python3.11 -m venv .venv
 make check
 ```
 
-35 regression tests. **No API keys, no network, no cost, under a second.** They
-cover floor control, the Priya→Arjun handoff, the difficulty ladder in both
-directions, repeat handling, and the interview ending. If this is green, the
-interview brain on your machine is intact.
+**99 regression tests. No API keys, no network, no cost.** Two suites: 35 for
+the conductor (floor control, the Priya→Arjun handoff, the difficulty ladder in
+both directions, repeat handling, the interview ending) and 64 for the marking
+engine (rubric shape, quote verification, allocation arithmetic). If this is
+green, the whole brain on your machine is intact.
+
+Once you have model keys, three more that spend no Agora minutes:
 
 ```bash
-make sim      # a full interview against an AI candidate — needs keys, no Agora
+make sim        # a full interview against an AI candidate
+make demo       # one interview marked end to end — the clearest thing to look at
+make score      # 35 more marking checks that judge with a real model (~2 min)
 ```
 
 ### 4. Credentials
@@ -177,8 +184,10 @@ make help
 
 | | |
 |---|---|
-| `make check` | 35 tests — free, no keys, under a second |
+| `make check` | 99 tests — free, no keys, no network |
 | `make sim` | full interview vs an AI candidate — no Agora minutes |
+| `make demo` | one interview marked end to end, with the final assessment |
+| `make score` | 35 marking checks that judge with a real model (~2 min) |
 | `make roles` | who can sit on the panel |
 | `make inputs` | what CVs and job adverts are available |
 | `make gateway` / `gateway-live` | the gateway, with / without auto-reload |
@@ -236,7 +245,15 @@ src/agora/             join · leave · interrupt · tokens · channel · panel
 src/conductor/         personas.yaml · floor control · six tools · difficulty
 src/intake/            job advert + CV  ->  a per-persona question plan
 src/state/             ledgers, shared session memory, the digest
-src/analysis/          instant heuristics (scoring and reports land here)
+src/analysis/          the marking engine
+   quick.py              instant heuristics, inline, no model call
+   rubrics.py            a marking scheme per question, built when it is ASKED
+   scorer.py             coverage + evidence quotes; the model observes,
+                         Python does the arithmetic
+   allocation.py         how many marks each question was worth (pure maths)
+   judge.py              Gemini access for marking — one model, or no score
+   pipeline.py           the only file that knows about SessionState
+   selftest.py           99 checks; --offline skips the ones that cost
 src/mock/              AI candidate · full-interview harness · 35 offline tests
 scripts/               panel.py, the interruption gate, TTS probe
 inputs/                job adverts and CVs

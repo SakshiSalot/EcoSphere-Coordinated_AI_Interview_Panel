@@ -3,6 +3,7 @@ uvicorn[standard]==0.34.0
 httpx==0.28.1
 openai==1.59.6
 google-genai==0.8.0
+pydantic>=2.9,<3
 PyYAML==6.0.2
 python-dotenv==1.0.1
 agora-token-builder==1.0.0
