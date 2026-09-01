@@ -156,6 +156,7 @@ class FlagLedger:
         quote: str = "",
         quote_b: str = "",
         ref_turn_id: int | None = None,
+        source: str = "",
     ) -> None:
         self._flags.append(
             Flag(
@@ -166,8 +167,18 @@ class FlagLedger:
                 quote_b=quote_b,
                 ref_turn_id=ref_turn_id,
                 at=time.time(),
+                source=source,
             )
         )
+
+    def for_turn(self, turn_id: int) -> list[Flag]:
+        """Everything raised against one answer.
+
+        The scoring penalty is computed from these rather than from a private
+        verdict of its own: one flag store, so the conductor's routing and the
+        candidate's marks can never disagree about whether an answer dodged.
+        """
+        return [f for f in self._flags if f.turn_id == turn_id]
 
     def of_kind(self, kind: str) -> list[Flag]:
         return [f for f in self._flags if f.kind == kind]

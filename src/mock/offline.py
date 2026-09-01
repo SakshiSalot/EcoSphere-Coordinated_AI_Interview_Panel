@@ -58,7 +58,17 @@ STRONG_WITH_BUSINESS = (
 
 
 def _stub_providers() -> None:
-    """Replace the model with a scripted panel, so these tests need no keys."""
+    """Replace the model with a scripted panel, so these tests need no keys.
+
+    The marking engine is switched off here for the same reason. `contract.py`
+    now dispatches rubric generation and scoring to a background thread on
+    every turn; left on, this suite would make real Gemini calls and spend the
+    day's quota every time anyone ran it — and its whole value is that it costs
+    nothing and can be run as a habit.
+    """
+    from src.analysis import pipeline
+
+    pipeline.set_enabled(False)
 
     questions = {
         "technical": "Tell me about a system you scaled. What actually broke first?",

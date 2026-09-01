@@ -114,6 +114,53 @@ async def state(session_id: str):
     return snap
 
 
+@app.post("/session/{session_id}/finish")
+async def finish(session_id: str):
+    """Total the interview and hand back the assessment.
+
+    Marking triggers itself — an answer arriving is the signal — but totalling
+    does not. Agora never tells us the interview is over; the agents simply
+    leave the channel. So somebody has to say so, and this is where they say it.
+
+    Call it after the agents leave. Safe to call twice: coverage is preserved
+    as a proportion when the marks are rescaled, so the numbers do not move.
+
+    Returns the assessment DATA — marks per interviewer, the total, penalties,
+    and every concept with the words that earned it. The written report renders
+    this; it makes no further judgement, because every mark already carries a
+    turn number and a quote verified against the transcript.
+    """
+    from src.analysis import pipeline
+    from src.state.session import get_session
+
+    session = get_session(session_id)
+    if not len(session.turns):
+        raise HTTPException(404, f"no interview recorded for session {session_id!r}")
+
+    # The last answer or two are usually still being judged when the agents
+    # leave. Without this the report silently omits the end of the interview —
+    # which is exactly where a candidate is pushed hardest.
+    pipeline.drain()
+
+    result = pipeline.finalise(session)
+    result["evidence"] = [
+        {"turn_id": turn_id, "role": role, "concept": concept, "quote": quote}
+        for turn_id, role, concept, quote in pipeline.evidence_for(session)
+    ]
+    result["flags"] = [
+        {"turn_id": f.turn_id, "kind": f.kind, "detail": f.detail,
+         "quote": f.quote, "source": f.source}
+        for f in session.flags.all()
+    ]
+
+    log.info(
+        "session %s finished: %.1f/%.0f over %d answers, %d evidence quotes",
+        session_id, result["earned"], result["total"],
+        result["answers"], len(result["evidence"]),
+    )
+    return result
+
+
 @app.post("/v1/{session_id}/{role}/chat/completions")
 async def chat_completions(
     session_id: str,

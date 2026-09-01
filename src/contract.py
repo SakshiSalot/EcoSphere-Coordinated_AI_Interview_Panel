@@ -12,6 +12,7 @@ import re
 import threading
 from typing import Iterator, Optional
 
+from src.analysis import pipeline
 from src.conductor.conductor import decide_floor, holds_floor, note_persona_turn
 from src.conductor.turn import observe, speak
 from src.state.session import SessionState, get_session
@@ -54,7 +55,15 @@ def next_utterance(
         # rather than emit an empty utterance the TTS will trip over.
         return None
 
-    note_persona_turn(session, role, text)
+    question_turn_id = note_persona_turn(session, role, text)
+
+    # Build this question's marking scheme while the candidate is answering it.
+    # Returns immediately; the work happens on a background thread. Doing it
+    # now rather than when the answer lands is also what keeps the mark
+    # defensible — a rubric written before the answer exists cannot be shaped
+    # by it.
+    pipeline.on_question_asked(session, question_turn_id)
+
     return iter(chunks(text))
 
 
@@ -76,7 +85,14 @@ def _advance(session: SessionState, messages: list) -> None:
 
     for text in said[already:]:
         turn_id = session.turns.add("candidate", text, difficulty=session.difficulty)
+
+        # Two tiers of the same detector, writing to one flag store. The
+        # heuristic runs inline because the conductor needs a signal on this
+        # turn; the judge is dispatched to a thread and lands a couple of
+        # seconds later, seeing the dodges a word list cannot. Submitting is
+        # instant — we are holding _TURN_LOCK and every persona is waiting.
         observe(session, turn_id, text)
+        pipeline.on_answer_recorded(session, turn_id)
 
     role, reason = decide_floor(session)
     log.info("turn %d -> floor: %s (%s)", len(session.turns), role, reason)

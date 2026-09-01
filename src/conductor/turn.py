@@ -300,7 +300,7 @@ def observe(session: SessionState, turn_id: int, text: str) -> float:
 
     vague, why, quote = quick.is_vague(text)
     if vague:
-        session.flags.add(turn_id, "vague", why, quote)
+        session.flags.add(turn_id, "vague", why, quote, source="heuristic")
         log.info("flag vague on turn %d: %s", turn_id, why)
 
     no_biz, biz_quote = quick.is_technically_sound_but_no_business(text)
@@ -310,6 +310,7 @@ def observe(session: SessionState, turn_id: int, text: str) -> float:
             "no_business_framing",
             "technically sound, but no user, customer or cost mentioned",
             biz_quote,
+            source="heuristic",
         )
         log.info("flag no_business_framing on turn %d", turn_id)
 

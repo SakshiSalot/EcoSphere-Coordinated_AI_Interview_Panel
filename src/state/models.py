@@ -64,6 +64,11 @@ class Flag:
     ref_turn_id: int | None = None
     at: float = 0.0
     routed: bool = False  # the conductor acts on a given flag only once
+    # Which tier raised it: "heuristic" (instant, inline, so the conductor has
+    # a signal on the very next turn) or "judge" (the async worker, slower and
+    # far better). One flag store either way — the conductor and the scorer
+    # must never disagree about whether an answer was a dodge.
+    source: str = ""
 
 
 # --- what the interview is about ---------------------------------------

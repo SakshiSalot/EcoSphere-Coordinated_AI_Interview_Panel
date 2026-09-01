@@ -196,11 +196,29 @@ class SessionState:
 
     @property
     def running_score(self) -> float:
-        """0..1 across the whole interview so far. Normalised so an interview
-        with fewer questions is not under-counted against a longer one."""
-        if not self.scores:
+        """0..1 across the whole interview so far: marks earned over marks
+        available.
+
+        Weighted, not an average of percentages. Averaging `normalised` counts
+        every answer equally, which silently cancels both difficulty weighting
+        and category weighting: a hard question worth 8 marks and an easy one
+        worth 2 would contribute the same, so clearing harder questions would
+        not score higher. Totalling first keeps the weighting and still solves
+        what a plain average was there for — a six-question interview and a
+        twenty-question one both land on the same 0..1 scale, so nobody is
+        under-counted for a shorter interview.
+
+        Identical to the average while every question carries the same marks;
+        the two diverge once the allocation layer sets a real budget per
+        question.
+        """
+        available = sum(s.max_score for s in self.scores)
+        if available <= 0:
             return 0.0
-        return sum(s.normalised for s in self.scores) / len(self.scores)
+        # Clamped per answer, matching AnswerScore.normalised: a penalty should
+        # zero out its own answer, never eat into another one's marks.
+        earned = sum(max(0.0, s.score - s.penalty) for s in self.scores)
+        return max(0.0, min(1.0, earned / available))
 
     def snapshot(self) -> dict:
         """What the observer dashboard and the debug endpoints render."""
