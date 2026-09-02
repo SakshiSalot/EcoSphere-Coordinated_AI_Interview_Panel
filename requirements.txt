@@ -2,7 +2,10 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 httpx==0.28.1
 openai==1.59.6
-google-genai==0.8.0
+# 0.8.0 predates the SDK's own 1.0 and cannot run src/analysis/judge.py:
+# no ThinkingConfig(thinking_level=...), no AutomaticFunctionCallingConfig,
+# and models.list() returns 501 against the current API.
+google-genai==2.20.0
 pydantic>=2.9,<3
 PyYAML==6.0.2
 python-dotenv==1.0.1

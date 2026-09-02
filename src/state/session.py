@@ -74,6 +74,12 @@ class SessionState:
     # Set when the candidate tries to talk the panel out of being a panel.
     pending_injection: str | None = None
 
+    # Bumped to kill every outstanding session token at once — when the
+    # interview is totalled, when it is set up again, or on demand if one is
+    # known to have leaked. The epoch is signed into each token, so raising it
+    # invalidates them all without storing a single one.
+    token_epoch: int = 0
+
     # An interview needs a defined end. Without one the panel simply stops
     # speaking and the candidate is left wondering whether it broke.
     closed: bool = False

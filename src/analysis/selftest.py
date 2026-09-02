@@ -255,6 +255,121 @@ def test_running_score() -> None:
           f"{penalised.running_score:.3f}")
 
 
+def test_auth() -> None:
+    """Every defence `gateway/auth.py` claims, attacked.
+
+    Lives here rather than in the gateway because this is the free suite that
+    already runs under `make check`. Harsh may want to move it; the tests
+    themselves need nothing but the module.
+    """
+    print("\n\033[1msession tokens — each claimed defence, attacked\033[0m")
+
+    from src import config
+    from src.gateway import auth
+
+    saved = config.GATEWAY_SHARED_SECRET
+    config.GATEWAY_SHARED_SECRET = "test-secret-long-enough-to-sign-with"
+    try:
+        pair = auth.tokens_for("interview-a")
+        recruiter = pair["recruiter_token"]
+        candidate = pair["candidate_token"]
+
+        check("a recruiter token verifies as a recruiter",
+              auth.verify(recruiter, "interview-a") == auth.RECRUITER)
+        check("a candidate token verifies as a candidate",
+              auth.verify(candidate, "interview-a") == auth.CANDIDATE)
+        check("the two tokens are different",
+              recruiter != candidate)
+
+        def rejected(what: str, token: str, session: str = "interview-a") -> None:
+            try:
+                auth.verify(token, session)
+                check(what, False, "ACCEPTED - this is exploitable")
+            except auth.AuthError:
+                check(what, True)
+
+        # The attack the session binding exists for.
+        rejected("a valid token is rejected on another interview",
+                 recruiter, "interview-b")
+
+        # Role escalation: take the candidate's own token, rewrite the role,
+        # re-encode. The signature no longer matches what was signed.
+        payload, signature = candidate.split(".")
+        forged = auth._b64(
+            auth._unb64(payload).replace(b"|candidate|", b"|recruiter|")
+        )
+        rejected("a candidate cannot rewrite their role to recruiter",
+                 f"{forged}.{signature}")
+
+        # Flipping a signature byte must not verify.
+        flipped = bytearray(auth._unb64(signature))
+        flipped[0] ^= 0x01
+        rejected("a tampered signature is rejected",
+                 f"{payload}.{auth._b64(bytes(flipped))}")
+
+        rejected("an expired token is rejected",
+                 auth.mint("interview-a", auth.RECRUITER, ttl=-1))
+        rejected("garbage does not crash the check", "not-a-token")
+        rejected("an empty token is rejected", "")
+        rejected("a payload with no signature is rejected", payload)
+
+        # A session id carrying the delimiter could shift the role field
+        # along and mint a candidate token that reads as a recruiter.
+        try:
+            auth.mint("evil|recruiter|9999999999", auth.CANDIDATE)
+            check("a session id cannot smuggle in the field delimiter", False,
+                  "MINTED - exploitable")
+        except auth.AuthError:
+            check("a session id cannot smuggle in the field delimiter", True)
+
+        # The candidate's token rides in a URL, so it gets the shorter life.
+        check("the candidate's token expires sooner than the recruiter's",
+              auth.TTL[auth.CANDIDATE] < auth.TTL[auth.RECRUITER],
+              f"{auth.TTL[auth.CANDIDATE]} vs {auth.TTL[auth.RECRUITER]}")
+
+        # Revocation: raising the session's epoch kills every token at once,
+        # without any of them having been stored.
+        old = auth.tokens_for("interview-c", epoch=3)
+        check("a token verifies against the epoch it was minted at",
+              auth.verify(old["recruiter_token"], "interview-c", epoch=3)
+              == auth.RECRUITER)
+        rejected("raising the epoch revokes an outstanding token",
+                 old["recruiter_token"], "interview-c")
+        try:
+            auth.verify(old["candidate_token"], "interview-c", epoch=4)
+            check("a revoked candidate token stays dead", False, "ACCEPTED")
+        except auth.AuthError:
+            check("a revoked candidate token stays dead", True)
+
+        fresh = auth.mint("interview-c", auth.RECRUITER, epoch=4)
+        check("a token minted after the bump works again",
+              auth.verify(fresh, "interview-c", epoch=4) == auth.RECRUITER)
+
+        # The operator key, and only the operator key.
+        check("the shared secret identifies an operator",
+              auth.caller_role(f"Bearer {config.GATEWAY_SHARED_SECRET}", "interview-a")
+              == auth.OPERATOR)
+        check("a session token still resolves through caller_role",
+              auth.caller_role(f"Bearer {candidate}", "interview-a")
+              == auth.CANDIDATE)
+        for header, why in [("", "no header"), ("Bearer wrong", "a wrong secret")]:
+            try:
+                auth.caller_role(header, "interview-a")
+                check(f"{why} is rejected", False, "ACCEPTED")
+            except auth.AuthError:
+                check(f"{why} is rejected", True)
+    finally:
+        config.GATEWAY_SHARED_SECRET = saved
+
+    # Reported against the REAL secret, not the test one.
+    if auth.secret_is_weak():
+        print(f"\n  \033[33mGATEWAY_SHARED_SECRET is "
+              f"{len(config.GATEWAY_SHARED_SECRET)} chars — it signs every "
+              f"token and is brute-forceable offline.\033[0m")
+        print("  \033[33mReplace it: python -c \"import secrets; "
+              "print(secrets.token_urlsafe(32))\"\033[0m")
+
+
 def test_penalty_from_flags() -> None:
     """One flag store, one meaning.
 
@@ -688,6 +803,7 @@ def main(argv: list[str] | None = None) -> int:
     test_rubric_parsing()
     test_rescale()
     test_question_detection()
+    test_auth()
     test_running_score()
     test_penalty_from_flags()
     test_allocation()

@@ -113,15 +113,24 @@ def _preflight(base: str) -> bool:
         return False
 
 
+# We are the operator: this script runs on a machine that already holds the
+# gateway key. Browsers get the per-session tokens /setup hands back instead —
+# the shared key must never reach one.
+def _operator() -> dict:
+    return {"Authorization": f"Bearer {config.GATEWAY_SHARED_SECRET}"}
+
+
 def _setup(base: str, channel: str, payload: dict) -> dict:
-    r = httpx.post(f"{base}/session/{channel}/setup", json=payload, timeout=180.0)
+    r = httpx.post(f"{base}/session/{channel}/setup", json=payload,
+                   headers=_operator(), timeout=180.0)
     r.raise_for_status()
     return r.json()
 
 
 def _state(base: str, channel: str) -> dict:
     try:
-        return httpx.get(f"{base}/session/{channel}/state", timeout=20.0).json()
+        return httpx.get(f"{base}/session/{channel}/state",
+                         headers=_operator(), timeout=20.0).json()
     except Exception:
         return {}
 

@@ -85,7 +85,13 @@ def main() -> int:
 
     base, sid = a.base.rstrip("/"), a.session
     roles = [r.strip() for r in a.roles.split(",") if r.strip()]
-    c = httpx.Client(timeout=240.0)
+    # This harness is an operator: it runs where the gateway key already is.
+    # Set once on the client so every session call carries it — the session
+    # endpoints reject an unauthenticated caller, which is the point.
+    c = httpx.Client(
+        timeout=240.0,
+        headers={"Authorization": f"Bearer {config.GATEWAY_SHARED_SECRET}"},
+    )
 
     print(f"\n\033[1mEND TO END VIA HTTP\033[0m  {base}  session={sid}")
     print("─" * 74)
@@ -112,8 +118,8 @@ def main() -> int:
         agents = j.json().get("agents", {}) if ok else {}
         check(f"all {len(roles)} agents joined", len(agents) == len(roles),
               j.text[:140])
-        check("the browser gets a token it can join with",
-              bool(j.json().get("candidate_token")) if ok else False)
+        check("the browser gets an RTC token it can join the channel with",
+              bool(j.json().get("rtc_token")) if ok else False)
         s = c.post(f"{base}/session/{sid}/stop").json()
         check("and every one of them leaves again", s.get("count") == len(agents))
 
