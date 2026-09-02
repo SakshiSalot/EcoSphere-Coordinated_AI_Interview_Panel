@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0e0e24" />
+    <title>Lumina — AI interview panel</title>
+
+    <!--
+      The Agora Web SDK comes from their CDN rather than npm: it is a large,
+      platform-specific bundle that gains nothing from going through Vite, and
+      loading it here keeps `window.AgoraRTC` available to the one page that
+      needs it without bloating every other route's chunk.
+    -->
+    <script src="https://download.agora.io/sdk/release/AgoraRTC_N-4.20.0.js"></script>
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

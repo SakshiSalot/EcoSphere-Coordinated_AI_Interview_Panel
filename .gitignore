@@ -24,3 +24,13 @@ sessions/
 # candidate CVs are personal data and this repo goes public at submission
 inputs/resume/*
 !inputs/resume/.gitkeep
+
+# the accounts database - real people, hashed passwords, never committed
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# the browser app
+frontend/node_modules/
+frontend/dist/

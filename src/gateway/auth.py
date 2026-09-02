@@ -149,7 +149,11 @@ def mint(
         raise AuthError("session id may not contain '|'")
 
     expires_at = int(time.time()) + (TTL[role] if ttl is None else ttl)
-    payload = f"{session_id}|{role}|{int(epoch)}|{expires_at}".encode()
+    # Leading "s" tags this as a SESSION token. User tokens carry "u". Without
+    # the tag a user token and a session token are both four signed fields and
+    # either could be read as the other — a token-confusion bug, and a nasty
+    # one, because both signatures are genuinely valid.
+    payload = f"s|{session_id}|{role}|{int(epoch)}|{expires_at}".encode()
     signature = hmac.new(_secret(), payload, sha256).digest()
     return f"{_b64(payload)}.{_b64(signature)}"
 
@@ -177,10 +181,13 @@ def verify(token: str, session_id: str, epoch: int = 0) -> str:
         raise AuthError("bad signature")
 
     try:
-        token_session, role, token_epoch, expires_at = payload.decode().split("|")
+        kind, token_session, role, token_epoch, expires_at = payload.decode().split("|")
         expiry, minted_epoch = int(expires_at), int(token_epoch)
     except ValueError:
         raise AuthError("malformed payload")
+
+    if kind != "s":
+        raise AuthError("not a session token")
 
     if minted_epoch != int(epoch):
         # Revoked: the interview was totalled, set up again, or somebody hit
@@ -202,6 +209,56 @@ def verify(token: str, session_id: str, epoch: int = 0) -> str:
         raise AuthError("unknown role in token")
 
     return role
+
+
+# --- user tokens --------------------------------------------------------
+# What a person gets when they log in. A SESSION token says "this interview";
+# a USER token says "this person" — so it carries no session and outlives any
+# one interview, and what it may reach is decided by looking up who owns the
+# interview rather than by anything inside the token.
+
+USER_TTL = 12 * 60 * 60
+
+
+def mint_user(user_id: int, role: str, ttl: int = USER_TTL) -> str:
+    """A signed proof of who someone is, issued at login."""
+    expires_at = int(time.time()) + ttl
+    payload = f"u|{int(user_id)}|{role}|{expires_at}".encode()
+    signature = hmac.new(_secret(), payload, sha256).digest()
+    return f"{_b64(payload)}.{_b64(signature)}"
+
+
+def verify_user(token: str) -> tuple[int, str]:
+    """(user_id, role) from a user token, or raise.
+
+    Deliberately does NOT say what the user may access. That depends on who
+    owns the interview being asked for, which is a database question — putting
+    it in the token would mean re-issuing one every time an assignment changes.
+    """
+    try:
+        encoded_payload, encoded_signature = token.split(".", 1)
+        payload = _unb64(encoded_payload)
+        signature = _unb64(encoded_signature)
+    except Exception:  # noqa: BLE001
+        raise AuthError("malformed token")
+
+    expected = hmac.new(_secret(), payload, sha256).digest()
+    if not hmac.compare_digest(signature, expected):
+        raise AuthError("bad signature")
+
+    try:
+        kind, user_id, role, expires_at = payload.decode().split("|")
+    except ValueError:
+        raise AuthError("malformed payload")
+
+    if kind != "u":
+        # A session token presented where a user token belongs. Both are
+        # correctly signed, so only the tag tells them apart.
+        raise AuthError("not a user token")
+    if int(expires_at) < time.time():
+        raise AuthError("token expired")
+
+    return int(user_id), role
 
 
 def caller_role(authorization: str, session_id: str, epoch: int = 0) -> str:

@@ -1,0 +1,112 @@
+import { useState } from "react";
+import { Navigate } from "react-router-dom";
+import { useAuth } from "../auth";
+
+/* One form, not two.
+ *
+ * A candidate signing in for the first time simply chooses a username and
+ * password; the account is created for them. From then on the same
+ * credentials are required. Nobody hands an interview candidate a username in
+ * advance, and a separate sign-up step is one more thing to get wrong before
+ * an interview that is already stressful.
+ *
+ * The page says so BEFORE they type, and says so again if an account was in
+ * fact created — because the failure mode of this design is a typo producing
+ * a second, empty account, and the only defence against that is making it
+ * obvious the moment it happens.
+ */
+export default function Login() {
+  const { user, signIn } = useAuth();
+  const [fields, setFields] = useState({ username: "", password: "", full_name: "" });
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  if (user) return <Navigate to="/" replace />;
+
+  const set = (key) => (e) => setFields({ ...fields, [key]: e.target.value });
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError("");
+    setBusy(true);
+    try {
+      await signIn(fields.username.trim(), fields.password);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="page narrow">
+      <div className="stack">
+        <div className="head" style={{ marginTop: 24 }}>
+          <div>
+            <h1>Sign in</h1>
+            <p className="sub">
+              First time here? Choose any username and password — we will create
+              your account. After that, use the same ones.
+            </p>
+          </div>
+        </div>
+
+        <div className="disclosure">
+          <span aria-hidden="true">◆</span>
+          <div>
+            <b>Interviews on this platform are conducted by AI.</b>
+            <p>
+              You will not be speaking to a person. Conversations are transcribed
+              and assessed, and a human reviews the result before any decision.
+            </p>
+          </div>
+        </div>
+
+        {error && <div className="notice error">{error}</div>}
+
+        <form className="card" onSubmit={submit}>
+          <div className="field">
+            <label htmlFor="username">Username</label>
+            <input
+              id="username" value={fields.username} onChange={set("username")}
+              autoComplete="username" required autoFocus autoCapitalize="none"
+              spellCheck="false" placeholder="something you will remember"
+            />
+            <p className="hint">
+              Use exactly the same one each time — a different spelling starts a
+              new account, and your interview will not be on it.
+            </p>
+          </div>
+
+          <div className="field">
+            <label htmlFor="full_name">Your name <span className="muted">(optional)</span></label>
+            <input
+              id="full_name" value={fields.full_name} onChange={set("full_name")}
+              autoComplete="name" placeholder="how the interviewers address you"
+            />
+          </div>
+
+          <div className="field">
+            <label htmlFor="password">Password</label>
+            <input
+              id="password" type="password" value={fields.password}
+              onChange={set("password")} autoComplete="current-password"
+              required minLength={8}
+            />
+            <p className="hint">At least 8 characters.</p>
+          </div>
+
+          <div style={{ marginTop: 18 }}>
+            <button className="btn-primary btn-block" disabled={busy}>
+              {busy ? <span className="spinner" /> : "Continue"}
+            </button>
+          </div>
+        </form>
+
+        <p className="center small muted">
+          Interview operators use the account they were given.
+        </p>
+      </div>
+    </main>
+  );
+}
