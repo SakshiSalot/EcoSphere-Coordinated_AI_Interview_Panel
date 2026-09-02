@@ -20,6 +20,7 @@ export default function Login() {
   const [fields, setFields] = useState({ username: "", password: "", full_name: "" });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   if (user) return <Navigate to="/" replace />;
 
@@ -88,11 +89,27 @@ export default function Login() {
 
           <div className="field">
             <label htmlFor="password">Password</label>
-            <input
-              id="password" type="password" value={fields.password}
-              onChange={set("password")} autoComplete="current-password"
-              required minLength={8}
-            />
+            <div className="password-field">
+              <input
+                id="password" type={showPassword ? "text" : "password"}
+                value={fields.password}
+                onChange={set("password")} autoComplete="current-password"
+                required minLength={8}
+              />
+              {/* tabIndex -1 so Tab goes straight from the password to Sign in.
+                  Somebody typing a long generated password wants to check it,
+                  not to stop at a control on the way to submitting. */}
+              <button
+                type="button"
+                className="reveal"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-pressed={showPassword}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                tabIndex={-1}
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
             <p className="hint">At least 8 characters.</p>
           </div>
 

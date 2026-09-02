@@ -19,6 +19,7 @@ export default function SignIn() {
   const [fields, setFields] = useState({ username: "", password: "", full_name: "" });
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   if (user) return <Navigate to="/" replace />;
 
@@ -91,11 +92,24 @@ export default function SignIn() {
 
           <div className="field">
             <label htmlFor="password">Password</label>
-            <input
-              id="password" type="password" value={fields.password}
-              onChange={set("password")} autoComplete="current-password"
-              required minLength={8}
-            />
+            <div className="password-field">
+              <input
+                id="password" type={showPassword ? "text" : "password"}
+                value={fields.password}
+                onChange={set("password")} autoComplete="current-password"
+                required minLength={8}
+              />
+              <button
+                type="button"
+                className="reveal"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-pressed={showPassword}
+                aria-label={showPassword ? "Hide password" : "Show password"}
+                tabIndex={-1}
+              >
+                {showPassword ? "Hide" : "Show"}
+              </button>
+            </div>
             <p className="hint">At least 8 characters.</p>
           </div>
 

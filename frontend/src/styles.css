@@ -428,3 +428,20 @@ button.item:hover:not(:disabled) { border-color: var(--accent); transform: trans
 }
 .btn-danger-quiet:disabled { opacity: .5; cursor: default; }
 .btn-danger-quiet:focus-visible { outline: 2px solid var(--bad); outline-offset: 2px; }
+
+
+/* Show / hide password. Sits inside the field rather than beside it, so the
+   input keeps its full width and the control cannot be mistaken for the
+   submit button — the two are otherwise adjacent and similarly sized. */
+.password-field { position: relative; display: block; }
+.password-field input { width: 100%; padding-right: 68px; }
+.password-field .reveal {
+  position: absolute; top: 50%; right: 8px; transform: translateY(-50%);
+  background: none; border: 0; padding: 4px 8px; border-radius: 6px;
+  font-size: 12px; font-weight: 600; letter-spacing: .02em;
+  color: var(--muted); cursor: pointer;
+}
+.password-field .reveal:hover { color: var(--ink); background: var(--line); }
+.password-field .reveal:focus-visible {
+  outline: 2px solid var(--accent-ink); outline-offset: 1px; color: var(--ink);
+}
