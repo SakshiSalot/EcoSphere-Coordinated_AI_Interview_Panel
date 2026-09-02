@@ -46,6 +46,15 @@ def decide_floor(session: SessionState) -> tuple[str, str]:
     roles = session.roles or active_roles()
     current = session.floor_holder if session.floor_holder in roles else roles[0]
 
+    # 0 — "could you repeat that?" is addressed to whoever just spoke.
+    #
+    # Nothing else may move the floor here. In a live run the rotation rule
+    # below fired on a repeat request, so Priya asked the question and Arjun
+    # repeated it — in a different voice. From the candidate's side that is
+    # indistinguishable from being ignored.
+    if session.pending_meta:
+        return _set(session, current, f"candidate asked to {session.pending_meta}", current)
+
     # 1 — a role-play owns the floor until it completes
     if session.active_scenario and session.scenario_owner in roles:
         return _set(session, session.scenario_owner, "scenario in progress", current)

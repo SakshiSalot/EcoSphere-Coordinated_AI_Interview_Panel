@@ -71,11 +71,22 @@ class SessionState:
     # Set when the candidate asks for a repeat rather than answering; consumed
     # by the next utterance.
     pending_meta: str | None = None
+    # Set when the candidate tries to talk the panel out of being a panel.
+    pending_injection: str | None = None
 
     # An interview needs a defined end. Without one the panel simply stops
     # speaking and the candidate is left wondering whether it broke.
     closed: bool = False
     max_turns: int = 14
+
+    # How many candidate answers existed when a persona last spoke.
+    #
+    # Agora calls the gateway again whenever it thinks a turn ended — a cough,
+    # a false barge-in, a pause it read as the end of speech. Without this the
+    # panel answers each of those with a NEW question, so a live run had Priya
+    # ask four different questions in a row while the candidate was still
+    # thinking about the first. One utterance per answer; silence otherwise.
+    spoke_after_answers: int = -1
 
     started_at: float = field(default_factory=time.time)
 

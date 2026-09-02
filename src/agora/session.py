@@ -22,6 +22,25 @@ from src.conductor.personas import active_roles, persona
 log = logging.getLogger("agora.session")
 
 
+# Which agents are live, per interview. The gateway needs this so a browser
+# can start and stop a panel over HTTP — a web page cannot run a Python
+# script, and every agent it starts must be stoppable by something other than
+# the terminal that started it.
+_ACTIVE: dict[str, dict[str, str]] = {}
+
+
+def active(session_id: str) -> dict[str, str]:
+    return dict(_ACTIVE.get(session_id, {}))
+
+
+def remember(session_id: str, agents: dict[str, str]) -> None:
+    _ACTIVE[session_id] = dict(agents)
+
+
+def forget(session_id: str) -> dict[str, str]:
+    return _ACTIVE.pop(session_id, {})
+
+
 async def start(
     channel: str,
     session_id: str | None = None,

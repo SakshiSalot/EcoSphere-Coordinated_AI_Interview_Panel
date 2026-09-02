@@ -46,6 +46,18 @@ def next_utterance(
         _advance(session, messages)
         speaking = holds_floor(session, role)
 
+        # One utterance per answer. Agora re-asks whenever it thinks a turn
+        # ended — a cough, a pause, a false barge-in — and answering each of
+        # those with a fresh question is how a live run produced four
+        # different questions in a row while the candidate was still thinking
+        # about the first.
+        answers = len(session.turns.by_speaker("candidate"))
+        if speaking and session.spoke_after_answers == answers:
+            log.info("%s/%s: nothing new said — staying silent", session_id, role)
+            speaking = False
+        elif speaking:
+            session.spoke_after_answers = answers
+
     if not speaking:
         return None
 

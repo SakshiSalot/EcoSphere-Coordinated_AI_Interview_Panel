@@ -86,10 +86,15 @@ RULES
 1. Every question must be GROUNDED. Name a specific system, technology, number
    or claim from the candidate's background, or a specific requirement from the
    advert. Put that source in `grounded_in`.
-   Good: "You moved from a shared database to per-tenant sharding — how did you
-   choose the shard key, and what did you do about tenants that outgrew a shard?"
+   Good: "You moved to per-tenant sharding — how did you choose the shard key?"
    Bad:  "How would you scale a database?"
-2. These are SPOKEN out loud. One or two sentences. No preamble, no lists.
+2. ONE question each, and it must be answerable out loud in under a minute.
+   One sentence, under 25 words. Never join two questions with "and" — a
+   compound question is unanswerable on a call, because the candidate can only
+   hold the last clause in their head.
+   Good: "How did you choose the shard key?"
+   Bad:  "How did you choose the shard key, what happened when a tenant
+          outgrew a shard, and how did you detect it?"
 3. Spread difficulty: roughly one easy, {max(1, per_role - 2)} medium, one hard
    per interviewer, so the panel has somewhere to go in both directions.
 4. The behavioural questions must still connect to this candidate's actual

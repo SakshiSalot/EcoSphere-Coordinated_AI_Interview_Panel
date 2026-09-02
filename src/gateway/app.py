@@ -11,6 +11,7 @@ the interview logic in ordinary Python we can test with no voice stack running.
 """
 
 import logging
+import os
 import time
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -92,6 +93,70 @@ async def setup(session_id: str, request: Request):
         session.roles or "(default)",
     )
     return result
+
+
+@app.post("/session/{session_id}/start")
+async def start_panel(session_id: str, request: Request):
+    """Bring the panel into the voice channel.
+
+    Exists so the whole interview is driveable over HTTP. `scripts/panel.py`
+    can orchestrate from a terminal, but the candidate's web page cannot run a
+    Python script — it needs to set up, start, and stop an interview with three
+    fetch calls.
+
+    Returns the candidate's own RTC token, because the browser has to join the
+    same channel and must never be handed the App Certificate to mint one
+    itself.
+    """
+    from src.agora import session as panel
+    from src.agora.tokens import build_token
+    from src.state.session import get_session
+
+    body = await request.json() if await request.body() else {}
+    session = get_session(session_id)
+    channel = (body.get("channel") or session_id).strip()
+
+    if panel.active(session_id):
+        raise HTTPException(409, "this interview already has agents in the call")
+
+    roles = session.roles or None
+    try:
+        agents = await panel.start(
+            channel,
+            session_id=session_id,
+            roles=roles,
+            idle_timeout=int(body.get("idle_timeout") or config.AGORA_IDLE_TIMEOUT),
+        )
+    except Exception as exc:
+        log.error("panel failed to start for %s: %s", session_id, exc)
+        raise HTTPException(502, f"panel failed to start: {exc}")
+
+    panel.remember(session_id, agents)
+    log.info("session %s: panel of %d joined %s", session_id, len(agents), channel)
+
+    return {
+        "channel": channel,
+        "app_id": config.AGORA_APP_ID,
+        "candidate_token": build_token(channel, 0),
+        "agents": agents,
+        "roles": list(agents),
+    }
+
+
+@app.post("/session/{session_id}/stop")
+async def stop_panel(session_id: str):
+    """Remove every agent from the call.
+
+    Idempotent, and safe to call from a browser `beforeunload` handler — an
+    agent left behind bills until its idle timeout, and a candidate closing
+    the tab is the most likely way that happens.
+    """
+    from src.agora import session as panel
+
+    agents = panel.forget(session_id)
+    if agents:
+        await panel.stop(agents)
+    return {"stopped": list(agents), "count": len(agents)}
 
 
 @app.get("/session/{session_id}/state")
@@ -223,3 +288,12 @@ async def unhandled(request: Request, exc: Exception):
     loudly, answer with a valid empty completion, and keep the call alive."""
     log.exception("unhandled error on %s", request.url.path)
     return JSONResponse(status_code=200, content={"error": str(exc)})
+
+
+if __name__ == "__main__":
+    # So `python -m src.gateway.app` works as well as `make gateway-live`.
+    # Reload is deliberately OFF here: session state lives in memory, and a
+    # reload firing mid-interview wipes the transcript and the question plan.
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "7860")))

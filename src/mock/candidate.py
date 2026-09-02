@@ -192,33 +192,58 @@ class AICandidate:
         return [b for b in self.plant if b not in self._done]
 
 
-_SENTINEL = re.compile(r"^\s*#{0,3}\s*DID\s*:\s*(.*)$", re.IGNORECASE)
+# Matched ANYWHERE, not just at the start of a line.
+#
+# The model was asked to put this on line one and instead appended it to the
+# end of a sentence — "...crossing our 15 ms threshold.###DID: dodge_followup".
+# A line-anchored parser then did the worst possible thing: it lost the label
+# AND left the marker in the answer. The transcript carried "###DID:
+# contradiction", the judge marked an answer containing it, and the scorecard
+# reported a miss for a behaviour the panel had actually caught.
+#
+# An evaluation harness that under-reports is worse than none — it makes
+# working features look broken and sends you debugging the wrong thing.
+# The id list matches ONLY known behaviour names, never arbitrary words.
+#
+# A permissive `[A-Za-z_ ,]*` looked right and was worse than the bug it
+# replaced: given "###DID: contradiction Actually, we're targeting 8k" it
+# swallowed "contradiction Actually, we" as one id — losing the label and
+# eating three words of the answer. Anchoring to the real vocabulary means a
+# stray word after the marker ends the match instead of being consumed.
+_IDS = "|".join(sorted(BEHAVIOURS, key=len, reverse=True))
+_SENTINEL = re.compile(
+    rf"#{{0,3}}\s*DID\s*:\s*((?:(?:{_IDS}|none)\s*[,;]?\s*)*)",
+    re.IGNORECASE,
+)
 
 
 def _parse(raw: str) -> tuple[str, list[str]]:
-    """Split the label line from the spoken answer.
+    """Pull the label out of the reply, wherever the model put it, and make
+    sure the marker never survives into the answer.
 
-    A missing label is logged loudly rather than swallowed: a silent fallback
-    would quietly stop recording ground truth and make our detectors look
-    perfect by measuring them against nothing.
+    The model was told to put this on line one. In practice it appends it to
+    the end of a sentence, so this matches anywhere. A line-anchored parser
+    did the worst possible thing: it lost the label AND left the marker in the
+    text, so the transcript carried "###DID: contradiction", the judge marked
+    an answer containing it, and the scorecard reported a miss for something
+    the panel had actually caught.
+
+    An evaluation harness that under-reports is worse than none — it makes
+    working features look broken and sends you debugging the wrong thing.
     """
-    lines = [l for l in raw.splitlines()]
     labels: list[str] = []
-    body: list[str] = []
 
-    for i, line in enumerate(lines):
-        m = _SENTINEL.match(line)
-        if m and not body:
-            raw_ids = m.group(1).strip().lower()
-            if raw_ids and raw_ids != "none":
-                labels = [x.strip() for x in raw_ids.replace(";", ",").split(",")]
-            continue
-        if line.strip():
-            body.append(line)
+    def take(match: re.Match) -> str:
+        ids = (match.group(1) or "").lower()
+        for name in re.split(r"[,;\s]+", ids):
+            if name and name != "none" and name in BEHAVIOURS:
+                labels.append(name)
+        return " "
 
-    text = " ".join(" ".join(body).split()).strip()
+    found = bool(_SENTINEL.search(raw))
+    text = " ".join(_SENTINEL.sub(take, raw).split()).strip()
 
-    if not labels and not any(_SENTINEL.match(l) for l in lines):
+    if not found:
         log.warning("candidate omitted the ###DID line: %r", raw[:120])
 
     return text, labels
