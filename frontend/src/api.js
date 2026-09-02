@@ -66,6 +66,7 @@ async function request(method, path, body) {
 export const api = {
   get:  (path) => request("GET", path),
   post: (path, body) => request("POST", path, body),
+  del:  (path) => request("DELETE", path),
 
   login:    (username, password) => request("POST", "/auth/login", { username, password }),
   register: (fields) => request("POST", "/auth/register", fields),
@@ -73,6 +74,7 @@ export const api = {
 
   interviews: () => request("GET", "/interviews"),
   assessment: (id) => request("GET", `/interviews/${encodeURIComponent(id)}/assessment`),
+  removeInterview: (id) => request("DELETE", `/interviews/${encodeURIComponent(id)}`),
   decide:     (id, decision) =>
     request("POST", `/interviews/${encodeURIComponent(id)}/decision`, { decision }),
 

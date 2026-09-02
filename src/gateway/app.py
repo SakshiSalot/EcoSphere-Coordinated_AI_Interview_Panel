@@ -439,6 +439,49 @@ async def assessment(session_id: str, authorization: str = Header(default="")):
     }
 
 
+@app.delete("/interviews/{session_id}")
+async def delete_interview(session_id: str, authorization: str = Header(default="")):
+    """Remove an interview. Operator only.
+
+    For clearing test runs and abandoned sessions — a dashboard full of debris
+    is a dashboard nobody reads.
+
+    Two refusals, both deliberate:
+
+      * An interview carrying a hiring DECISION is not deletable. That record
+        is the reason a person was hired or not, and deleting it quietly is
+        exactly what an audit exists to prevent.
+      * Agents are stopped BEFORE the row goes. Deleting the record of a live
+        interview would leave them in the channel billing with nothing left
+        that knows they are there.
+    """
+    _caller(authorization, session_id, (auth.OPERATOR,))
+
+    row = db.interview(session_id)
+    if row is None:
+        raise HTTPException(404, f"no interview {session_id!r}")
+
+    if row["decision"]:
+        raise HTTPException(
+            409,
+            "This interview has a hiring decision recorded against it and "
+            "cannot be deleted.",
+        )
+
+    from src.agora import session as panel
+    from src.state.session import drop_session
+
+    agents = panel.forget(session_id)
+    if agents:
+        await panel.stop(agents)
+        log.info("session %s: stopped %d agents before deleting", session_id, len(agents))
+
+    drop_session(session_id)
+    db.delete_interview(session_id)
+    log.info("session %s deleted", session_id)
+    return {"deleted": session_id, "agents_stopped": len(agents)}
+
+
 @app.post("/interviews/{session_id}/decision")
 async def decide(
     session_id: str, request: Request, authorization: str = Header(default="")
@@ -926,7 +969,6 @@ def _total_interview(session_id: str) -> dict | None:
         for f in session.flags.all()
     ]
     db.save_assessment(session_id, result)
-    db.set_status(session_id, "marked")
     log.info(
         "session %s marked: %.1f/%.0f over %d answers, %d evidence quotes",
         session_id, result["earned"], result["total"],

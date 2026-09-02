@@ -195,6 +195,22 @@ def save_assessment(session_id: str, assessment: dict) -> None:
     )
 
 
+def delete_interview(session_id: str) -> bool:
+    """Remove an interview and everything stored with it.
+
+    A hard delete, deliberately. This exists to clear test runs and abandoned
+    sessions, and a soft-deleted row that still shows up in a COUNT is not
+    cleared. Assessments are evidence, so the endpoint refuses to delete one
+    that already carries a hiring decision — see the route.
+    """
+    # Not via write(): that returns lastrowid, which says nothing about how
+    # many rows a DELETE removed.
+    conn = connect()
+    cursor = conn.execute("DELETE FROM interviews WHERE session_id = ?", (session_id,))
+    conn.commit()
+    return cursor.rowcount > 0
+
+
 def record_decision(session_id: str, decision: str, operator_id: int) -> None:
     """The human in the loop. The point of the whole system is that a person
     makes this call, so it is stored with who made it and when."""

@@ -17,6 +17,24 @@ export default function OperatorHome() {
   const navigate = useNavigate();
   const [interviews, setInterviews] = useState(null);
   const [error, setError] = useState("");
+  const [removing, setRemoving] = useState("");
+
+  // Deleting is destructive and the rows all look alike, so confirm against
+  // the specific one rather than trusting a click.
+  const remove = async (it, event) => {
+    event.stopPropagation();
+    const who = it.candidate || it.session_id;
+    if (!window.confirm(`Delete the interview with ${who}? This cannot be undone.`)) return;
+    setRemoving(it.session_id);
+    try {
+      await api.removeInterview(it.session_id);
+      setInterviews((rows) => rows.filter((r) => r.session_id !== it.session_id));
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setRemoving("");
+    }
+  };
 
   useEffect(() => {
     api.interviews()
@@ -64,11 +82,18 @@ export default function OperatorHome() {
             {interviews.map((it) => {
               const scored = typeof it.score === "number";
               return (
-                <button
+                <div
                   key={it.session_id}
                   className="item"
+                  role="button"
+                  tabIndex={0}
                   onClick={() => navigate(`/assessment/${encodeURIComponent(it.session_id)}`)}
-                  disabled={it.status !== "ended"}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      navigate(`/assessment/${encodeURIComponent(it.session_id)}`);
+                    }
+                  }}
                 >
                   <div className="top">
                     <span className="title">{it.candidate}</span>
@@ -76,6 +101,18 @@ export default function OperatorHome() {
                       <span className={`badge ${it.status}`}>{LABEL[it.status] || it.status}</span>
                       {it.decision && (
                         <span className={`badge ${it.decision}`}>{DECISION[it.decision]}</span>
+                      )}
+                      {/* A decision is the record a hire rests on; the server
+                          refuses to delete one, so do not offer it here. */}
+                      {!it.decision && (
+                        <button
+                          className="btn-danger-quiet"
+                          title="Delete this interview"
+                          onClick={(e) => remove(it, e)}
+                          disabled={removing === it.session_id}
+                        >
+                          {removing === it.session_id ? "…" : "Delete"}
+                        </button>
                       )}
                     </span>
                   </div>
@@ -89,10 +126,10 @@ export default function OperatorHome() {
                   </div>
                   {it.status !== "ended" && (
                     <span className="meta small">
-                      No assessment yet — it appears when the interview is totalled.
+                      Not finished — opens the transcript so far.
                     </span>
                   )}
-                </button>
+                </div>
               );
             })}
           </div>

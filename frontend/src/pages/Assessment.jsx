@@ -56,6 +56,50 @@ export default function Assessment() {
     return <main className="page center" style={{ paddingTop: 60 }}><span className="spinner" /></main>;
   }
 
+  // An interview that ended without being marked is a normal state, not an
+  // error: the candidate dropped out, or the panel never reached its closing.
+  // Reading `assessment.by_role` on a null blanked the whole page — a crash
+  // rather than a message, and with the transcript sitting right there unread.
+  if (!report.assessment) {
+    const turns = report.transcript || [];
+    return (
+      <main className="page">
+        <div className="stack">
+          <div className="head">
+            <div>
+              <h1>{report.job_title || "Interview"}</h1>
+              <p className="sub">Interview {report.session_id} · {report.status}</p>
+            </div>
+            <button className="btn-ghost" onClick={() => navigate("/")}>Back</button>
+          </div>
+
+          <div className="notice">
+            {report.note || "This interview has not been marked."}
+          </div>
+
+          {turns.length > 0 && (
+            <section className="card">
+              <h2>Transcript</h2>
+              <p className="sub">
+                {turns.length} turns. Nothing has been scored, so there is no
+                evidence to cite yet.
+              </p>
+              <div className="transcript">
+                {turns.map((t) => (
+                  <div key={t.turn_id}
+                       className={`turn ${t.speaker === "candidate" ? "you" : ""}`}>
+                    <div className="speaker">{t.speaker}</div>
+                    <div>{t.text}</div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+      </main>
+    );
+  }
+
   const a = report.assessment;
   const roles = Object.entries(a.by_role || {});
   const evidence = a.evidence || [];

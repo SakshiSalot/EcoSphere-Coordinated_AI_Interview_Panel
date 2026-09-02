@@ -294,5 +294,12 @@ def reset_session(session_id: str) -> SessionState:
         return _SESSIONS[session_id]
 
 
+def drop_session(session_id: str) -> bool:
+    """Forget an interview held in memory. Used when it is deleted, so a
+    stale transcript cannot outlive the record it belonged to."""
+    with _LOCK:
+        return _SESSIONS.pop(session_id, None) is not None
+
+
 def all_sessions() -> dict[str, SessionState]:
     return dict(_SESSIONS)

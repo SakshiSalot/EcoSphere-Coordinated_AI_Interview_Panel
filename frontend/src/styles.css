@@ -412,3 +412,19 @@ button.item:hover:not(:disabled) { border-color: var(--accent); transform: trans
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+
+/* Delete, on a row of interviews that all look alike. Quiet until hovered:
+   destructive actions should be reachable without competing for attention
+   with the thing the operator actually came here to do. */
+.btn-danger-quiet {
+  background: none; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 999px; padding: 3px 11px; font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: color .15s, border-color .15s, background .15s;
+}
+.btn-danger-quiet:hover:not(:disabled) {
+  color: var(--bad); border-color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+}
+.btn-danger-quiet:disabled { opacity: .5; cursor: default; }
+.btn-danger-quiet:focus-visible { outline: 2px solid var(--bad); outline-offset: 2px; }
