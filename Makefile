@@ -1,4 +1,4 @@
-.PHONY: help check score demo demo-live sim gateway gateway-live tunnel interview gate roles inputs stop kill status
+.PHONY: help serve ui check score demo demo-live sim gateway gateway-live tunnel interview gate roles inputs stop kill status
 
 PY := .venv/bin/python
 UVICORN := .venv/bin/uvicorn
@@ -21,7 +21,11 @@ help:
 	@echo "    make roles         who can sit on the panel"
 	@echo "    make inputs        what is in inputs/"
 	@echo ""
-	@echo "  RUNNING — two terminals, left open"
+	@echo "  RUN THE PRODUCT"
+	@echo "    make serve         tunnel + gateway + UI, addresses wired — USE THIS"
+	@echo "    make ui            rebuild the browser app after frontend changes"
+	@echo ""
+	@echo "  RUNNING THE PIECES SEPARATELY"
 	@echo "    make gateway       the gateway, auto-reloading (development)"
 	@echo "    make gateway-live  the gateway, no reload (use for live tests)"
 	@echo "    make tunnel        public HTTPS Agora can reach"
@@ -75,6 +79,17 @@ inputs:
 
 # --reload picks up code changes automatically. Use this while building: a
 # stale gateway silently serving old code cost us an evening.
+# Everything, in the right order, with the tunnel address wired into .env.
+# Use this to demo or to test voice — it is the only target that guarantees
+# Agora can actually reach the gateway.
+serve:
+	@scripts/serve.sh
+
+# Build the browser app. The gateway serves frontend/dist, so without this
+# the site is a 404 at /.
+ui:
+	@npm --prefix frontend install --silent && npm --prefix frontend run build
+
 gateway:
 	$(UVICORN) src.gateway.app:app --port $(PORT) --reload
 

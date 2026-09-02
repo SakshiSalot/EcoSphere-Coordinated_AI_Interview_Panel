@@ -17,6 +17,7 @@ from src.state.ledger import (
     IntegrityLedger,
     TurnLedger,
 )
+from src import config as _config
 from src.state.models import AnswerScore, CandidateProfile, JobSpec, PlannedQuestion
 
 
@@ -83,7 +84,7 @@ class SessionState:
     # An interview needs a defined end. Without one the panel simply stops
     # speaking and the candidate is left wondering whether it broke.
     closed: bool = False
-    max_turns: int = 14
+    max_turns: int = field(default_factory=lambda: _config.INTERVIEW_MAX_TURNS)
 
     # How many candidate answers existed when a persona last spoke.
     #

@@ -16,6 +16,7 @@ import logging
 
 from src import config
 from src.agora import agent as agora
+from src.agora.agent import CANDIDATE_UID
 from src.agora.tokens import build_token
 from src.conductor.personas import active_roles, persona
 
@@ -70,7 +71,9 @@ async def start(
             channel=channel,
             token=build_token(channel, p["uid"]),
             agent_uid=p["uid"],
-            remote_uids=["*"],
+            # ONLY the candidate. Subscribing to "*" makes the panel
+            # interview itself.
+            remote_uids=[str(CANDIDATE_UID)],
         )
         if idle_timeout:
             body["properties"]["idle_timeout"] = idle_timeout

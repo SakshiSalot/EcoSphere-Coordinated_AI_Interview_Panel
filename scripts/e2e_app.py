@@ -19,6 +19,7 @@ Costs Groq and Gemini tokens. Costs zero agent-minutes.
 import argparse
 import io
 import json
+import os
 import sys
 import time
 
@@ -207,8 +208,17 @@ def main(argv: list[str] | None = None) -> int:
 
     # --- 6. the operator ----------------------------------------------------
     print("\n\033[1m6. the operator, and the decision\033[0m")
+    # seed_users generates the operator password and prints it once, so a
+    # hardcoded one here can only ever fail. Pass it in:
+    #     E2E_OPERATOR_PASSWORD=... python -m scripts.e2e_app
+    op_user = os.getenv("E2E_OPERATOR", "operator")
+    op_pass = os.getenv("E2E_OPERATOR_PASSWORD", "")
+    if not op_pass:
+        print(f"{SKIP}no E2E_OPERATOR_PASSWORD set — the operator half is not "
+              f"exercised. Seed with scripts.seed_users and pass the password in.")
+        return _summary()
     op = client.post(f"{base}/auth/login",
-                     json={"username": "operator", "password": "EchoSphere@2026"})
+                     json={"username": op_user, "password": op_pass})
     if op.status_code != 200:
         print(f"{SKIP}operator sign-in failed ({op.status_code}) — reseed with "
               f"scripts.seed_users")

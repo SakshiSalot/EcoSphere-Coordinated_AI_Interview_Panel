@@ -41,6 +41,20 @@ class TurnLedger:
         self._turns.append(turn)
         return turn.turn_id
 
+    def extend(self, turn_id: int, text: str) -> bool:
+        """Replace a turn's text with a longer version of itself.
+
+        Agora sends a partial transcript the moment it thinks a turn ended,
+        then sends it again as the candidate keeps talking. Recording only the
+        first fragment leaves the transcript — and everything marked from it —
+        holding half a sentence.
+        """
+        turn = self.get(turn_id)
+        if turn is None:
+            return False
+        turn.text = text
+        return True
+
     def get(self, turn_id: int) -> Turn | None:
         if 1 <= turn_id <= len(self._turns):
             return self._turns[turn_id - 1]

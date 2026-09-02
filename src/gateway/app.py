@@ -408,17 +408,34 @@ async def assessment(session_id: str, authorization: str = Header(default="")):
     _caller(authorization, session_id, (auth.OPERATOR,))
 
     row = db.interview(session_id)
-    if row is None or not row["assessment_json"]:
-        raise HTTPException(404, "no assessment recorded for this interview")
+    if row is None:
+        raise HTTPException(404, f"no interview {session_id!r}")
 
     import json as _json
+
+    # The transcript comes back whether or not the marking finished.
+    #
+    # Refusing the whole record because a number is missing hid the
+    # conversation itself: an interview that ended without being totalled
+    # showed the operator a 404, even though the evidence they most need to
+    # read was sitting in the database.
+    transcript = db.load_transcript(session_id)
+    marked = bool(row["assessment_json"])
 
     return {
         "session_id": session_id,
         "job_title": row["job_title"],
         "status": row["status"],
         "decision": row["decision"],
-        "assessment": _json.loads(row["assessment_json"]),
+        "transcript": transcript,
+        "marked": marked,
+        "assessment": _json.loads(row["assessment_json"]) if marked else None,
+        "note": None if marked else (
+            "Not totalled yet — use Finish to mark this interview."
+            if transcript else
+            "No transcript recorded. The interview ended before anyone spoke, "
+            "or the gateway restarted mid-call."
+        ),
     }
 
 
@@ -658,12 +675,22 @@ async def join_credentials(session_id: str, authorization: str = Header(default=
     _caller(authorization, session_id, (auth.OPERATOR, auth.CANDIDATE))
     _not_finished(session_id)
 
+    from src.agora.agent import CANDIDATE_UID
     from src.agora.tokens import build_token
 
+    # A FIXED uid, and a token bound to it.
+    #
+    # Joining on uid 0 let Agora assign a random one, which meant the agents
+    # could not name the candidate in `remote_rtc_uids` and had to subscribe
+    # to "*" — so every agent also subscribed to every other agent, heard
+    # their speech, transcribed it, and answered it as if the candidate had
+    # spoken. Naming the uid here is what lets the panel listen to the
+    # candidate and to nobody else.
     return {
         "channel": session_id,
         "app_id": config.AGORA_APP_ID,
-        "rtc_token": build_token(session_id, 0),
+        "uid": CANDIDATE_UID,
+        "rtc_token": build_token(session_id, CANDIDATE_UID),
     }
 
 
@@ -758,7 +785,50 @@ async def stop_panel(session_id: str, authorization: str = Header(default="")):
     agents = panel.forget(session_id)
     if agents:
         await panel.stop(agents)
-    return {"stopped": list(agents), "count": len(agents)}
+
+    # Write the conversation down before the only copy disappears.
+    #
+    # The transcript lived in memory alone, so closing the tab or restarting
+    # the gateway destroyed it and the operator opened an empty record. It is
+    # the artefact the whole product exists to produce; the marks can be
+    # recomputed from it, but nothing can recover it.
+    from src.state.db import save_transcript
+    from src.state.session import get_session
+
+    session = get_session(session_id)
+    turns = [
+        {"turn_id": t.turn_id, "speaker": t.speaker, "text": t.text,
+         "difficulty": t.difficulty, "at": t.started_at}
+        for t in session.turns.all()
+    ]
+    if turns:
+        save_transcript(session_id, turns)
+
+    # Hanging up is not the same as finishing.
+    #
+    # The panel decides when the interview is over — it covers its plan, says
+    # goodbye, and sets `closed`. Only then is the record complete and marked.
+    # A dropped connection or a closed tab must leave the interview rejoinable,
+    # or a candidate whose wifi blinks is locked out of their own assessment.
+    completed = session.closed
+    result = None
+    if completed:
+        db.set_status(session_id, "ended")
+        result = _total_interview(session_id)
+
+    log.info(
+        "session %s: %d turns saved, %s",
+        session_id, len(turns),
+        "completed and marked" if completed else "still open — can rejoin",
+    )
+
+    return {
+        "stopped": list(agents),
+        "count": len(agents),
+        "turns_saved": len(turns),
+        "completed": completed,
+        "marked": result is not None,
+    }
 
 
 @app.get("/session/{session_id}/state")
@@ -826,6 +896,45 @@ async def revoke(session_id: str, authorization: str = Header(default="")):
     return {"revoked": True, "epoch": session.token_epoch}
 
 
+def _total_interview(session_id: str) -> dict | None:
+    """Mark the interview and store the assessment. Returns None if there is
+    nothing to mark.
+
+    Shared by the automatic path (the call ended) and the operator's manual
+    Finish. Safe to run twice — coverage is kept as a proportion when marks are
+    rescaled, so the numbers do not move.
+    """
+    from src.analysis import pipeline
+    from src.state.session import get_session
+
+    session = get_session(session_id)
+    if not len(session.turns):
+        return None
+
+    # The last answer or two are usually still being judged when the agents
+    # leave. Without this the report silently omits the end of the interview —
+    # which is exactly where a candidate is pushed hardest.
+    pipeline.drain()
+    result = pipeline.finalise(session)
+    result["evidence"] = [
+        {"turn_id": turn_id, "role": role, "concept": concept, "quote": quote}
+        for turn_id, role, concept, quote in pipeline.evidence_for(session)
+    ]
+    result["flags"] = [
+        {"turn_id": f.turn_id, "kind": f.kind, "detail": f.detail,
+         "quote": f.quote, "source": f.source}
+        for f in session.flags.all()
+    ]
+    db.save_assessment(session_id, result)
+    db.set_status(session_id, "marked")
+    log.info(
+        "session %s marked: %.1f/%.0f over %d answers, %d evidence quotes",
+        session_id, result["earned"], result["total"],
+        result["answers"], len(result["evidence"]),
+    )
+    return result
+
+
 @app.post("/session/{session_id}/finish")
 async def finish(session_id: str, authorization: str = Header(default="")):
     """Total the interview and hand back the assessment.
@@ -852,6 +961,7 @@ async def finish(session_id: str, authorization: str = Header(default="")):
     session = get_session(session_id)
     if not len(session.turns):
         raise HTTPException(404, f"no interview recorded for session {session_id!r}")
+
 
     # The last answer or two are usually still being judged when the agents
     # leave. Without this the report silently omits the end of the interview —

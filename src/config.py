@@ -41,6 +41,12 @@ PANEL_SIZE = int(os.getenv("PANEL_SIZE", "2"))
 # Explicit panel by role name, e.g. "technical,hiring_manager,customer".
 # Overrides PANEL_SIZE when set.
 PANEL_ROLES = os.getenv("PANEL_ROLES", "").strip()
+
+# How many candidate answers before the panel wraps up, if the question plan
+# has not already been covered. A demo runs four minutes; fourteen answers is
+# a real screening interview and far more than anyone will sit through on
+# stage.
+INTERVIEW_MAX_TURNS = int(os.getenv("INTERVIEW_MAX_TURNS", "14"))
 SILENCE_MODE = os.getenv("SILENCE_MODE", "empty_completion").strip()
 
 PERSONAS_FILE = ROOT / "src" / "conductor" / "personas.yaml"

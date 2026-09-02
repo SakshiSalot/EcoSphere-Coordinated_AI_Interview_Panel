@@ -63,6 +63,21 @@ CREATE INDEX IF NOT EXISTS ix_interviews_operator  ON interviews(operator_id);
 _local = threading.local()
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Add columns to a database that already exists.
+
+    Interviews used to live only in memory, so a gateway restart — or a
+    candidate simply closing the tab — lost the transcript entirely and the
+    operator opened an empty record. The transcript is the one artefact the
+    whole product exists to produce; it cannot be the only thing not written
+    down.
+    """
+    have = {row[1] for row in conn.execute("PRAGMA table_info(interviews)")}
+    if "transcript_json" not in have:
+        conn.execute("ALTER TABLE interviews ADD COLUMN transcript_json TEXT")
+        conn.commit()
+
+
 def connect() -> sqlite3.Connection:
     """This thread's connection, created on first use.
 
@@ -82,6 +97,7 @@ def connect() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(SCHEMA)
     conn.commit()
+    _migrate(conn)
 
     _local.conn = conn
     return conn
@@ -141,6 +157,26 @@ def create_interview(
 def set_status(session_id: str, status: str) -> None:
     write("UPDATE interviews SET status = ? WHERE session_id = ?",
           (status, session_id))
+
+
+def save_transcript(session_id: str, turns: list[dict]) -> None:
+    """Persist the conversation. Called when the call ends, so an operator can
+    still read and mark it after a restart."""
+    write(
+        "UPDATE interviews SET transcript_json = ? WHERE session_id = ?",
+        (json.dumps(turns), session_id),
+    )
+
+
+def load_transcript(session_id: str) -> list[dict]:
+    row = one("SELECT transcript_json FROM interviews WHERE session_id = ?",
+              (session_id,))
+    if not row or not row["transcript_json"]:
+        return []
+    try:
+        return json.loads(row["transcript_json"])
+    except json.JSONDecodeError:
+        return []
 
 
 def save_assessment(session_id: str, assessment: dict) -> None:

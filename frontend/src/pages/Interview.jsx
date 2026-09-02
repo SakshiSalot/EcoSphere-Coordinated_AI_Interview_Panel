@@ -95,7 +95,10 @@ export default function Interview() {
       // 3. The candidate enters the room. uid null: the RTC token is minted
       // for uid 0, which Agora reads as "valid for any uid" — binding it to
       // one would reject this browser.
-      await rtc.join(creds.app_id, creds.channel, creds.rtc_token, null);
+      // Join on the uid the server minted the token for. Passing null let
+      // Agora pick one at random, which forced the agents to subscribe to
+      // "*" — and they then heard each other rather than the candidate.
+      await rtc.join(creds.app_id, creds.channel, creds.rtc_token, creds.uid ?? null);
       await rtc.publish([track]);
       client.current = rtc;
       mic.current = track;

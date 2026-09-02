@@ -185,8 +185,9 @@ def test_one_speaker() -> None:
     history: list = []
 
     try:
-        for _ in range(6):
-            _turn("t-floor", history, "That is a fair question, let me think.")
+        for i in range(6):
+            _turn("t-floor", history,
+                  f"Answer {i}: we sharded Postgres and cut p99 latency.")
         check("exactly one persona speaks on every turn", True)
     except AssertionError as exc:
         check("exactly one persona speaks on every turn", False, str(exc))
@@ -220,9 +221,16 @@ def test_vague_holds_floor() -> None:
     session = reset_session("t-vague")
     history: list = []
 
+    # Two DIFFERENT vague answers. A candidate who waffles does not repeat one
+    # sentence verbatim, and identical text inside ten seconds is treated as
+    # the same turn arriving from a second agent.
+    VAGUE_2 = (
+        "Well, at the end of the day it varies case by case, and you have to "
+        "weigh up a number of things before you commit to any one direction."
+    )
     _turn("t-vague", history, VAGUE)
-    role_a, _ = _turn("t-vague", history, VAGUE)
-    role_b, _ = _turn("t-vague", history, "Right, so, broadly it varies a lot.")
+    role_a, _ = _turn("t-vague", history, VAGUE_2)
+    role_b, _ = _turn("t-vague", history, "Right, so, broadly it depends a lot.")
 
     check(
         "the interviewer holds the floor to pin them down",
@@ -469,6 +477,76 @@ def test_guardrails_and_introductions() -> None:
           "arjun" in second.lower(), second[:70])
 
 
+def test_partial_transcripts() -> None:
+    """Agora re-sends the same turn as the candidate keeps talking."""
+    print("\n\033[1mgrowing partial transcripts\033[0m")
+    session = reset_session("t-partial")
+    session.roles = ["technical", "product"]
+    history: list = []
+
+    _turn("t-partial", history, "Uh, well, when the request is received, the.")
+    # _turn appends the answer after the persona speaks, so drive one more
+    # round to have the gateway actually consume it.
+    for r in active_roles():
+        next_utterance("t-partial", r, history)
+    first = session.turns.last_candidate()
+    check("the first fragment is recorded", first is not None and first.text.endswith("the."))
+
+    # Same turn, more words — Agora calls again with the fuller transcript.
+    history[-1]["content"] = (
+        "Uh, well, when the request is received, the. Server basically "
+        "searches the vector store and re-ranks the top hits."
+    )
+    for r in active_roles():
+        next_utterance("t-partial", r, history)
+
+    last = session.turns.last_candidate()
+    check("the turn is extended, not duplicated",
+          len(session.turns.by_speaker("candidate")) == 1,
+          f"{len(session.turns.by_speaker('candidate'))} candidate turns")
+    check("and now holds the whole sentence",
+          last is not None and "re-ranks" in last.text, (last.text if last else ""))
+
+    # A genuinely different answer must still open a new turn.
+    history.append({"role": "user", "content": "We used ChromaDB for the index."})
+    for r in active_roles():
+        next_utterance("t-partial", r, history)
+    check("an unrelated answer starts a new turn",
+          len(session.turns.by_speaker("candidate")) == 2,
+          f"{len(session.turns.by_speaker('candidate'))} candidate turns")
+
+
+def test_truncated_history() -> None:
+    """Agora caps each agent's history, and every agent has its own.
+
+    A live interview died here: five good turns, then silence forever. The
+    turn tracker counted user messages, but a silent persona's history barely
+    grows and every history is capped at max_history — so the count stopped
+    rising and every later answer looked like nothing new.
+    """
+    print("\n\033[1mper-agent, truncated history\033[0m")
+    session = reset_session("t-trunc")
+    session.roles = ["technical", "product"]
+
+    # Only the newest answer, as a capped history would carry it.
+    for i, answer in enumerate([
+        "We sharded Postgres by tenant id and cut p99 from 400ms to 60ms.",
+        "The routing table lives in Redis with a read replica per shard.",
+        "We dual-wrote for two weeks before backfilling the old rows.",
+    ]):
+        spoke = []
+        for r in active_roles():
+            st = next_utterance("t-trunc", r, [{"role": "user", "content": answer}])
+            if st is not None:
+                spoke.append((r, "".join(st)))
+        check(f"turn {i + 1}: the panel still answers", len(spoke) == 1,
+              f"{len(spoke)} spoke")
+
+    check("every answer was recorded despite a one-message history",
+          len(session.turns.by_speaker("candidate")) == 3,
+          f"{len(session.turns.by_speaker('candidate'))} recorded")
+
+
 def test_interview_ends() -> None:
     """The panel must say goodbye rather than simply going quiet."""
     print("\n\033[1mthe interview ends\033[0m")
@@ -531,6 +609,8 @@ def main() -> int:
     test_candidate_labels()
     test_live_run_regressions()
     test_guardrails_and_introductions()
+    test_partial_transcripts()
+    test_truncated_history()
     test_interview_ends()
     test_shared_context()
 

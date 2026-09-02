@@ -25,6 +25,29 @@ log = logging.getLogger("agora")
 
 TIMEOUT = httpx.Timeout(20.0, connect=10.0)
 
+# The candidate joins on a FIXED uid so the agents can subscribe to that uid
+# and nothing else.
+#
+# With `remote_rtc_uids: ["*"]` every agent subscribes to every other agent:
+# Arjun hears Priya's greeting, transcribes it, and answers it as though the
+# candidate had said it. A live run showed exactly that — Priya's AI
+# disclosure arriving at Arjun as input, over and over. It also doubles the
+# speech recognition we pay for and lets the panel talk to itself.
+CANDIDATE_UID = 2001
+
+# 480 ms of quiet ended the turn, which is shorter than the pause in the
+# middle of an ordinary sentence. Agora was calling the gateway mid-answer
+# with a partial transcript — " Uh, well, when the request is received, the." —
+# and then again as it grew. Roughly a second is the usual conversational
+# floor for end-of-turn.
+DEFAULT_VAD = {
+    "silence_duration_ms": 950,
+    "speech_duration_ms": 15000,
+    "threshold": 0.5,
+    "interrupt_duration_ms": 160,
+    "prefix_padding_ms": 300,
+}
+
 
 def _auth_header() -> str:
     raw = f"{config.AGORA_CUSTOMER_ID}:{config.AGORA_CUSTOMER_SECRET}"
@@ -84,16 +107,7 @@ def build_join_body(
                 "output_modalities": ["text", "audio"],
             },
             "tts": persona["tts"],
-            "vad": persona.get(
-                "vad",
-                {
-                    "silence_duration_ms": 480,
-                    "speech_duration_ms": 15000,
-                    "threshold": 0.5,
-                    "interrupt_duration_ms": 160,
-                    "prefix_padding_ms": 300,
-                },
-            ),
+            "vad": persona.get("vad", DEFAULT_VAD),
             "advanced_features": {"enable_aivad": False, "enable_bhvs": False},
         },
     }
