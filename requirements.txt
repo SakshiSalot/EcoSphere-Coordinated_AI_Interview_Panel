@@ -15,3 +15,10 @@ pypdf>=6.1.1
 
 # FastAPI needs this to parse multipart uploads (resume / job description)
 python-multipart==0.0.32
+
+# Turso, for a shared accounts database. Only used when TURSO_URL is set —
+# without it src/state/db.py falls back to the local SQLite file, so this is
+# never on the critical path and the offline suites never touch the network.
+# NOT libsql-experimental: that one has no wheel for Windows and needs a Rust
+# toolchain to build.
+libsql==0.1.11

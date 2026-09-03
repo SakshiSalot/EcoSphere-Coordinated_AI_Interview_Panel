@@ -21,6 +21,7 @@ which is what stops a dashboard poll blocking on an interview being saved.
 
 import json
 import logging
+import os
 import secrets
 import sqlite3
 import threading
@@ -92,7 +93,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     whole product exists to produce; it cannot be the only thing not written
     down.
     """
-    have = {row[1] for row in conn.execute("PRAGMA table_info(interviews)")}
+    # .fetchall() rather than iterating the cursor: sqlite3's cursor is
+    # iterable, libsql's is not, and this runs against both.
+    have = {row[1] for row in conn.execute("PRAGMA table_info(interviews)").fetchall()}
 
     # Each column is added on its own so a database halfway through a previous
     # migration finishes rather than failing on the first one it already has.
@@ -139,7 +142,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     # The candidate's own profile links. On the USER and not the interview: a
     # person's GitHub does not change between two applications, and asking them
     # to prove ownership once per interview would be a reason not to bother.
-    user_columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+    user_columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()
+    }
     for column, ddl in {
         "github_username":  "TEXT NOT NULL DEFAULT ''",
         "github_json":      "TEXT",
@@ -161,7 +166,31 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def connect() -> sqlite3.Connection:
+# --- which database -----------------------------------------------------
+# Local SQLite file by default; Turso when TURSO_URL is set.
+#
+# Turso IS SQLite — same dialect, same placeholders, same ON CONFLICT — so the
+# schema and every query below are identical either way. Only the connection
+# differs, which is the whole reason it was chosen over Postgres.
+#
+# SQLite stays as the fallback deliberately. Unset TURSO_URL and everything
+# works offline again, so a bad connection or an outage costs one environment
+# variable rather than a rewrite. The offline test suites never touch the
+# network for the same reason.
+
+TURSO_URL = os.getenv("TURSO_URL", "").strip()
+TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "").strip()
+
+
+def using_turso() -> bool:
+    return bool(TURSO_URL)
+
+
+def backend() -> str:
+    return "turso" if using_turso() else "sqlite"
+
+
+def connect():
     """This thread's connection, created on first use.
 
     A connection may not be shared between threads, and FastAPI hands requests
@@ -171,27 +200,55 @@ def connect() -> sqlite3.Connection:
     if conn is not None:
         return conn
 
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-    # Readers do not block on a writer. Without this the operator dashboard
-    # polling for scores would stall every time an interview is saved.
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.executescript(SCHEMA)
-    conn.commit()
-    _migrate(conn)
+    if using_turso():
+        import libsql
 
+        conn = libsql.connect(database=TURSO_URL, auth_token=TURSO_AUTH_TOKEN)
+        # No PRAGMAs: WAL and foreign keys are the server's business, and
+        # libsql returns plain tuples rather than sqlite3.Row — which is why
+        # `query` and `one` below name the columns themselves.
+        conn.executescript(SCHEMA)
+        conn.commit()
+        log.info("database: turso (%s)", TURSO_URL.split("//")[-1][:40])
+    else:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(DB_PATH, timeout=10.0)
+        # Readers do not block on a writer. Without this the operator dashboard
+        # polling for scores would stall every time an interview is saved.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.executescript(SCHEMA)
+        conn.commit()
+
+    _migrate(conn)
     _local.conn = conn
     return conn
 
 
-def query(sql: str, args: tuple = ()) -> list[sqlite3.Row]:
-    return connect().execute(sql, args).fetchall()
+def _rows(cursor) -> list[dict]:
+    """Name the columns ourselves, so both backends return the same thing.
+
+    sqlite3 can do this with a row_factory; libsql cannot — it returns plain
+    tuples. Rather than have callers cope with two shapes, every row leaves
+    this module as a dict, whichever database produced it. Nothing outside
+    `db.py` changes, because everything already reads rows by name.
+    """
+    fetched = cursor.fetchall()
+    if not fetched:
+        return []
+    names = [c[0] for c in (cursor.description or [])]
+    if not names:
+        return []
+    return [dict(zip(names, row)) for row in fetched]
 
 
-def one(sql: str, args: tuple = ()) -> sqlite3.Row | None:
-    return connect().execute(sql, args).fetchone()
+def query(sql: str, args: tuple = ()) -> list[dict]:
+    return _rows(connect().execute(sql, args))
+
+
+def one(sql: str, args: tuple = ()) -> dict | None:
+    rows = _rows(connect().execute(sql, args))
+    return rows[0] if rows else None
 
 
 def write(sql: str, args: tuple = ()) -> int:
