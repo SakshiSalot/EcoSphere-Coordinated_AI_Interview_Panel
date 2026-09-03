@@ -62,26 +62,48 @@ async def start(
     session_id = session_id or channel
     roles = roles or active_roles()
 
+    failures: list[str] = []
+
     async def join_one(role: str) -> tuple[str, str] | None:
         p = persona(role)
-        body = agora.build_join_body(
-            session_id=session_id,
-            role=role,
-            persona=p,
-            channel=channel,
-            token=build_token(channel, p["uid"]),
-            agent_uid=p["uid"],
-            # ONLY the candidate. Subscribing to "*" makes the panel
-            # interview itself.
-            remote_uids=[str(CANDIDATE_UID)],
-        )
-        if idle_timeout:
-            body["properties"]["idle_timeout"] = idle_timeout
-        try:
-            return role, await agora.join(body)
-        except Exception as exc:
-            log.error("%s failed to join: %s", p["name"], str(exc)[:200])
-            return None
+
+        # The persona's own voice first, then anything else this account
+        # accepts. A vendor outage changes how Priya sounds; it should not
+        # decide whether the interview happens at all.
+        voices = [p["tts"], *agora.TTS_FALLBACKS]
+
+        for attempt, tts in enumerate(voices):
+            candidate = dict(p)
+            candidate["tts"] = tts
+            body = agora.build_join_body(
+                session_id=session_id,
+                role=role,
+                persona=candidate,
+                channel=channel,
+                token=build_token(channel, p["uid"]),
+                agent_uid=p["uid"],
+                # ONLY the candidate. Subscribing to "*" makes the panel
+                # interview itself.
+                remote_uids=[str(CANDIDATE_UID)],
+            )
+            if idle_timeout:
+                body["properties"]["idle_timeout"] = idle_timeout
+            try:
+                agent_id = await agora.join(body)
+                if attempt:
+                    log.warning(
+                        "%s joined on a FALLBACK voice (%s) — the configured "
+                        "one could not be reached, so they will not sound as "
+                        "intended", p["name"], tts.get("vendor"),
+                    )
+                return role, agent_id
+            except Exception as exc:
+                detail = str(exc)[:200]
+                log.error("%s failed to join on %s: %s",
+                          p["name"], tts.get("vendor"), detail)
+                failures.append(f"{p['name']} ({tts.get('vendor')}): {detail}")
+
+        return None
 
     results = await asyncio.gather(*(join_one(r) for r in roles))
     agents = {r: a for r, a in (x for x in results if x)}
@@ -97,7 +119,15 @@ async def start(
     if len(agents) != len(roles):
         missing = [persona(r)["name"] for r in roles if r not in agents]
         await stop(agents)
-        raise RuntimeError(f"panel incomplete, tore down. Missing: {missing}")
+        # The REASON travels with the failure. "Missing: ['Priya', 'Arjun']"
+        # says only that something went wrong and sends whoever reads it to
+        # the logs; the actual cause — an Agora outage, a rejected model
+        # name, an unreachable gateway — is what tells them whether to retry
+        # or to change something.
+        why = failures[0] if failures else "no detail from Agora"
+        raise RuntimeError(
+            f"panel incomplete, tore down. Missing: {missing}. First failure — {why}"
+        )
 
     return agents
 

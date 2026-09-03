@@ -38,11 +38,19 @@ LOG=/tmp/echosphere-tunnel.log
 cloudflared tunnel --url "http://localhost:$PORT" --no-autoupdate > "$LOG" 2>&1 &
 TUNNEL_PID=$!
 
-# The hostname appears in the log a moment before DNS resolves it, so wait
-# for a real answer rather than for the line to print.
-for _ in $(seq 1 60); do
+# The hostname appears in the log a moment before DNS resolves it, so wait for
+# the address to actually answer rather than for the line to print.
+#
+# ANY HTTP response counts, which is why this is not `curl -f`. The gateway has
+# not been started yet — it starts below, deliberately, so it reads the address
+# this loop discovers — so the tunnel correctly returns 502 here. Requiring a
+# healthy /health meant the condition could never be true, and this loop ran
+# its full sixty iterations on every single start: roughly two minutes of
+# silent waiting before anything happened. A 502 is the proof we actually want,
+# because it means DNS resolved and cloudflared is answering.
+for _ in $(seq 1 45); do
   URL=$(grep -oE "https://[a-z0-9-]+\.trycloudflare\.com" "$LOG" | head -1 || true)
-  if [ -n "${URL:-}" ] && curl -fsS --max-time 5 "$URL/health" >/dev/null 2>&1; then
+  if [ -n "${URL:-}" ] && curl -sS -o /dev/null --max-time 5 "$URL/" 2>/dev/null; then
     break
   fi
   sleep 2

@@ -14,6 +14,7 @@ different credential pair from the App Certificate, which signs RTC tokens.
 Confusing the two costs an hour.
 """
 
+import asyncio
 import base64
 import logging
 
@@ -121,16 +122,86 @@ def build_join_body(
     return body
 
 
-async def join(body: dict) -> str:
-    """Start an agent. Returns its agent_id."""
-    async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-        r = await client.post(_url("join"), headers=_headers(), json=body)
-    if r.status_code >= 400:
-        raise RuntimeError(f"join failed {r.status_code}: {r.text}")
-    data = r.json()
-    agent_id = data.get("agent_id") or data.get("agentId") or ""
-    log.info("joined %s as agent_id=%s", body.get("name"), agent_id)
-    return agent_id
+# Agora's own words when a vendor behind managed TTS is down. It arrives as a
+# 500 and reads exactly like a configuration error, which cost an evening the
+# first time — the config is fine, the service behind it is not.
+TRANSIENT = (
+    "temporarily unavailable",
+    "internalerror",
+    "try again",
+    "timeout",
+)
+
+# Other voices to try when the configured one cannot be reached.
+#
+# PROBED, NOT GUESSED — `scripts/probe_tts.py` asks this account what it will
+# actually accept, and the answer is narrow: under `credential_mode: managed`
+# this SKU refuses microsoft, elevenlabs, cartesia and google outright, and
+# accepts only minimax and openai `tts-1`. Both are listed here because they
+# fail independently: on the evening this was written minimax was down and
+# openai's config validated cleanly, so a panel that could fall back would
+# have started.
+#
+# The voice changes when a fallback is used, which is a real cost — Priya
+# sounds different. It is still much better than the alternative, which is an
+# interview that does not happen.
+TTS_FALLBACKS = [
+    {
+        "credential_mode": "managed",
+        "vendor": "openai",
+        "params": {
+            "url": "https://api.openai.com/v1/audio/speech",
+            "model": "tts-1",
+            "voice": "nova",
+        },
+    },
+]
+
+
+def _is_transient(text: str) -> bool:
+    """A 500 we should retry, versus a 400 we should not.
+
+    The distinction matters because the two look similar and the responses are
+    opposite: an invalid model name will never succeed however many times it is
+    sent, and a vendor outage will never be fixed by editing the config.
+    """
+    low = text.lower()
+    return any(marker in low for marker in TRANSIENT)
+
+
+async def join(body: dict, attempts: int = 3) -> str:
+    """Start an agent. Returns its agent_id.
+
+    Retried on a transient failure, because the alternative is what the panel
+    does today: one agent hits a 500, `start_panel` sees an incomplete panel,
+    tears the whole thing down, and the candidate is told the interview cannot
+    start. A vendor hiccup lasting two seconds should not end an interview.
+
+    NOT retried on a 4xx. "model 'speech-02-turbo' is not available for the
+    current SKU" is a fact about the account, and sending it twice more only
+    makes the candidate wait longer for the same answer.
+    """
+    last = ""
+    for attempt in range(1, attempts + 1):
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            r = await client.post(_url("join"), headers=_headers(), json=body)
+
+        if r.status_code < 400:
+            data = r.json()
+            agent_id = data.get("agent_id") or data.get("agentId") or ""
+            log.info("joined %s as agent_id=%s", body.get("name"), agent_id)
+            return agent_id
+
+        last = f"join failed {r.status_code}: {r.text}"
+        if r.status_code < 500 or not _is_transient(r.text):
+            raise RuntimeError(last)
+
+        log.warning("%s: transient join failure, attempt %d of %d",
+                    body.get("name"), attempt, attempts)
+        if attempt < attempts:
+            await asyncio.sleep(1.5 * attempt)
+
+    raise RuntimeError(last)
 
 
 async def leave(agent_id: str) -> None:

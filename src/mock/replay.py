@@ -134,6 +134,16 @@ def run(
             _say("candidate", answer.text, session)
         history.append({"role": "user", "content": answer.text})
 
+    # Wait for the background workers before reporting what was caught.
+    #
+    # Half of contradiction detection is a model call dispatched to a thread —
+    # the half that catches the ones arithmetic cannot see, which is exactly
+    # the kind the AI candidate plants. Printing the summary without draining
+    # reported those as MISSED while the verdict was still in flight, so the
+    # harness was marking a working capability as broken.
+    from src.analysis import pipeline
+
+    pipeline.drain()
     _summary(session, candidate, latencies)
     return session
 

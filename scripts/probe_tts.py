@@ -34,14 +34,46 @@ def _mm(model: str, voice: str) -> dict:
     }
 
 
+def _managed(vendor: str, params: dict) -> dict:
+    return {"credential_mode": "managed", "vendor": vendor, "params": params}
+
+
+# TELLING THE TWO FAILURES APART IS THE WHOLE POINT of running this.
+#
+#   "Invalid value at properties.tts..."     -> Agora PARSED our config and
+#                                               refused it. Our problem: wrong
+#                                               field, wrong model, wrong SKU.
+#   "The model service is temporarily
+#    unavailable. Retry later."              -> the config is VALID and the
+#                                               vendor behind it is down. Not
+#                                               our problem, and no amount of
+#                                               editing the config fixes it.
+#
+# The second one took an evening to recognise, because it looks like a
+# configuration error and reads like one. It is not: it is an outage, and the
+# only useful response is a different vendor.
 CANDIDATES = [
-    ("minimax 2.6-turbo · English_captivating_female1", _mm("speech-2.6-turbo", "English_captivating_female1")),
-    ("minimax 2.8-turbo · English_captivating_female1", _mm("speech-2.8-turbo", "English_captivating_female1")),
-    ("minimax 02-turbo  · English_captivating_female1", _mm("speech-02-turbo", "English_captivating_female1")),
-    ("minimax 2.6-turbo · English_expressive_narrator", _mm("speech-2.6-turbo", "English_expressive_narrator")),
-    ("minimax 2.6-turbo · English_magnetic_male",       _mm("speech-2.6-turbo", "English_magnetic_male")),
-    ("minimax 2.6-turbo · English_Gentle-voiced_man",   _mm("speech-2.6-turbo", "English_Gentle-voiced_man")),
-    ("minimax 2.6-turbo · Wise_Woman",                  _mm("speech-2.6-turbo", "Wise_Woman")),
+    # MiniMax, the current default.
+    ("minimax  2.6-turbo · English_captivating_female1", _mm("speech-2.6-turbo", "English_captivating_female1")),
+    ("minimax  2.8-turbo · English_captivating_female1", _mm("speech-2.8-turbo", "English_captivating_female1")),
+    ("minimax  2.6-turbo · Wise_Woman",                  _mm("speech-2.6-turbo", "Wise_Woman")),
+
+    # Everything else this account might be entitled to. Param shapes differ
+    # per vendor; a validation error here tells us the right shape, which is
+    # exactly what we want to learn.
+    ("microsoft · en-US-AvaMultilingualNeural", _managed("microsoft", {
+        "voice_name": "en-US-AvaMultilingualNeural", "region": "eastus"})),
+    ("microsoft · en-US-JennyNeural", _managed("microsoft", {
+        "voice_name": "en-US-JennyNeural", "region": "eastus"})),
+    ("elevenlabs · Rachel", _managed("elevenlabs", {
+        "voice_id": "21m00Tcm4TlvDq8ikWAM", "model_id": "eleven_flash_v2_5"})),
+    ("cartesia · sonic-2", _managed("cartesia", {
+        "model_id": "sonic-2",
+        "voice": {"mode": "id", "id": "a0e99841-438c-4a64-b679-ae501e7d6091"}})),
+    ("openai · alloy", _managed("openai", {
+        "model": "gpt-4o-mini-tts", "voice": "alloy"})),
+    ("google · en-US-Standard-C", _managed("google", {
+        "language_code": "en-US", "name": "en-US-Standard-C"})),
 ]
 
 
