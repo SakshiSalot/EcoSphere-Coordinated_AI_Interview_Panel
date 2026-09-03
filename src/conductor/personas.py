@@ -158,10 +158,33 @@ def persona_prompt(
     role: str,
     difficulty: str = "medium",
     shared_context: str = "",
+    scenario: str | None = None,
+    scenario_turns: int = 0,
 ) -> str:
-    """The full system message for one persona on one turn."""
+    """The full system message for one persona on one turn.
+
+    `scenario` is the role-play currently running, if this persona is running
+    one. Its instructions are rebuilt EVERY turn rather than sent once at
+    launch: a model handed a character and then several turns of conversation
+    drifts back into being an interviewer, and the role-play dissolves without
+    anybody deciding it should.
+    """
+    from src.conductor import scenarios as scenario_lib
+
     p = persona(role)
     parts = [p["prompt"].strip(), BREVITY]
+
+    if scenario:
+        running = scenario_lib.by_id(scenario)
+        if running is not None:
+            # In character, the ordinary brevity rule still applies but the
+            # catalogue does not — offering a menu of role-plays to a persona
+            # already inside one invites it to start a second.
+            parts.append(scenario_lib.in_character(running, scenario_turns))
+    else:
+        catalogue = scenario_lib.catalogue(role)
+        if catalogue:
+            parts.append(catalogue)
 
     if shared_context:
         parts.append(

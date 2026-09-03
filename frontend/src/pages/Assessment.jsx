@@ -185,6 +185,21 @@ export default function Assessment() {
       .catch((e) => setError(e.message));
   }, [sessionId]);
 
+  /* The record a decision rests on, as a file. A page behind a login renders
+   * whatever the database says today; six weeks into a dispute, what matters
+   * is what was known when the call was made. */
+  const download = async () => {
+    setSaving("pdf");
+    setError("");
+    try {
+      await api.reportPdf(sessionId);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving("");
+    }
+  };
+
   const decide = async (decision) => {
     setSaving(decision);
     try {
@@ -276,9 +291,12 @@ export default function Assessment() {
             <h1>{report.job_title || "Assessment"}</h1>
             <p className="sub">Interview {report.session_id}</p>
           </div>
-          <button className="btn-ghost" style={{ marginLeft: "auto" }} onClick={() => navigate("/")}>
-            Back
-          </button>
+          <div className="row" style={{ marginLeft: "auto" }}>
+            <button className="btn-ghost" onClick={download} disabled={saving === "pdf"}>
+              {saving === "pdf" ? <span className="spinner" /> : "Download report"}
+            </button>
+            <button className="btn-ghost" onClick={() => navigate("/")}>Back</button>
+          </div>
         </div>
 
         {/* --- the marks --- */}

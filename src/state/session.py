@@ -37,6 +37,10 @@ class SessionState:
     consecutive_turns: int = 0
     active_scenario: str | None = None
     scenario_owner: str | None = None
+    # Candidate answers since the role-play started. The conductor releases the
+    # floor once this passes the cap, so forgetting to call `end_scenario`
+    # cannot silence the rest of the panel for the whole interview.
+    scenario_turns: int = 0
 
     # --- difficulty ---
     difficulty: str = "medium"
@@ -48,6 +52,12 @@ class SessionState:
     candidate: CandidateProfile = field(default_factory=CandidateProfile)
     plan: list[PlannedQuestion] = field(default_factory=list)
     rubrics: dict[int, dict] = field(default_factory=dict)  # turn_id -> rubric
+
+    # The distinctive things the CV claims, indexed once. Running a regex over
+    # a full resume on every answer is wasted work, and the CV cannot change
+    # mid-interview. None means "not indexed yet", which is not the same as an
+    # empty set — a candidate with no CV.
+    resume_index: set[str] | None = None
 
     # --- ledgers ---
     turns: TurnLedger = field(default_factory=TurnLedger)

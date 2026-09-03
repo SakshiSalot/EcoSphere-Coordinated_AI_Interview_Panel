@@ -8,6 +8,9 @@ import Prepare from "./pages/Prepare";
 import Interview from "./pages/Interview";
 import Assessment from "./pages/Assessment";
 import Profile from "./pages/Profile";
+import NewJob from "./pages/NewJob";
+import JobDetail from "./pages/JobDetail";
+import Coding from "./pages/Coding";
 
 /* The bar every page sits under. Dark, so it belongs to the hero on the
  * landing page and reads as a product chrome everywhere else.
@@ -96,6 +99,21 @@ export default function App() {
         <Route
           path="/interview/:sessionId"
           element={<Protected role="candidate"><Interview /></Protected>}
+        />
+        {/* The coding round is the candidate's, but an operator opening it
+          * reads the same page with the marking visible — the server decides
+          * which of the two views to send. */}
+        <Route
+          path="/coding/:sessionId"
+          element={<Protected><Coding /></Protected>}
+        />
+        <Route
+          path="/jobs/new"
+          element={<Protected role="operator"><NewJob /></Protected>}
+        />
+        <Route
+          path="/jobs/:jobId"
+          element={<Protected role="operator"><JobDetail /></Protected>}
         />
         <Route
           path="/assessment/:sessionId"

@@ -19,7 +19,10 @@ from fastapi import (
     FastAPI, File, Form, Header, HTTPException, Request, UploadFile,
 )
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import (
+    FileResponse, JSONResponse, Response, StreamingResponse,
+)
 
 from src import config
 from src.contract import next_utterance
@@ -501,6 +504,13 @@ async def my_interviews(authorization: str = Header(default="")):
                 "score": r["score"],
                 "decision": r["decision"],
                 "created_at": r["created_at"],
+                # So the dashboard can tell an interview that belongs to an
+                # opening from a loose one. Without it the two would be listed
+                # together, and a candidate curated under an advert would
+                # appear both here and on that advert's leaderboard, meaning
+                # something different in each place.
+                "job_id": r["job_id"],
+                "stage": r["stage"],
             }
             for r in db.interviews_for_operator(caller.user_id)
         ]}
@@ -511,6 +521,12 @@ async def my_interviews(authorization: str = Header(default="")):
             "job_title": r["job_title"],
             "status": r["status"],
             "created_at": r["created_at"],
+            # The candidate's home screen needs to know which round is next:
+            # the conversation and the coding exercise are taken separately,
+            # possibly days apart, and "Completed" against a half-finished
+            # interview would send them away with a round outstanding.
+            "stage": r["stage"],
+            "coding": bool(r["coding_json"]),
         }
         for r in db.interviews_for_candidate(caller.user_id)
     ]}
@@ -553,34 +569,29 @@ async def start_interview(request: Request, authorization: str = Header(default=
     return {"session_id": session_id}
 
 
-@app.get("/interviews/{session_id}/assessment")
-async def assessment(session_id: str, authorization: str = Header(default="")):
-    """The stored report: marks per interviewer, and every quote behind them.
+def _assembled_report(session_id: str) -> dict:
+    """Everything the assessment consists of, in one place.
 
-    Operator only. This is the evidence a hiring decision rests on.
+    The screen and the PDF are two renderings of ONE payload rather than two
+    assemblies of the same idea. Building them separately is how a report ends
+    up disagreeing with the page it was printed from — the sort of discrepancy
+    nobody notices until a candidate disputes a decision.
     """
-    _caller(authorization, session_id, (auth.OPERATOR,))
-
     row = db.interview(session_id)
     if row is None:
         raise HTTPException(404, f"no interview {session_id!r}")
 
     import json as _json
 
-    # The transcript comes back whether or not the marking finished.
-    #
-    # Refusing the whole record because a number is missing hid the
-    # conversation itself: an interview that ended without being totalled
-    # showed the operator a 404, even though the evidence they most need to
-    # read was sitting in the database.
+    from src.integrity import monitor
+
     transcript = db.load_transcript(session_id)
     marked = bool(row["assessment_json"])
-
-    from src.integrity import monitor
 
     return {
         "session_id": session_id,
         "job_title": row["job_title"],
+        "candidate": row["candidate_name"] or "",
         "status": row["status"],
         "decision": row["decision"],
         "transcript": transcript,
@@ -600,6 +611,53 @@ async def assessment(session_id: str, authorization: str = Header(default="")):
             "or the gateway restarted mid-call."
         ),
     }
+
+
+@app.get("/interviews/{session_id}/assessment")
+async def assessment(session_id: str, authorization: str = Header(default="")):
+    """The stored report: marks per interviewer, and every quote behind them.
+
+    Operator only. This is the evidence a hiring decision rests on.
+    """
+    _caller(authorization, session_id, (auth.OPERATOR,))
+    return _assembled_report(session_id)
+
+
+@app.get("/interviews/{session_id}/report.pdf")
+async def assessment_pdf(session_id: str, authorization: str = Header(default="")):
+    """The assessment as a document that can be filed, forwarded and archived.
+
+    A page behind a login renders whatever the database says today; a hiring
+    decision needs a fixed record of what was known when it was made. Rendered
+    from the same payload the screen uses, so the two cannot drift apart.
+    """
+    _caller(authorization, session_id, (auth.OPERATOR,))
+
+    from src.report import document
+
+    report = _assembled_report(session_id)
+    try:
+        pdf = await run_in_threadpool(document.build_pdf, report)
+    except ImportError as exc:
+        # WeasyPrint needs system Pango/Cairo. The Docker image installs them;
+        # a bare laptop may not have them, and that should be a clear message
+        # rather than a 500 with a stack trace about a missing shared library.
+        log.error("PDF rendering unavailable: %s", exc)
+        raise HTTPException(
+            503,
+            "PDF rendering is not available on this server — the Pango/Cairo "
+            "libraries are missing. The assessment is still readable on screen.",
+        )
+
+    log.info("session %s: rendered a %d KB report", session_id, len(pdf) // 1024)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="{document.filename(report)}"'
+        },
+    )
 
 
 @app.delete("/interviews/{session_id}")
@@ -793,6 +851,31 @@ def _text_from_upload(upload, raw: bytes) -> str:
             "Paste the text instead.",
         )
     return text[:MAX_EXTRACTED_CHARS]
+
+
+@app.post("/extract")
+async def extract(file: UploadFile = File(...),
+                  authorization: str = Header(default="")):
+    """Pull the text out of one uploaded file and hand it straight back.
+
+    The job endpoints take a CV and an advert as plain strings, and an operator
+    curating five interviews has five PDFs, not five strings. Rather than turn
+    two JSON endpoints into multipart ones, this does the extraction on its own
+    and the browser passes the result along.
+
+    Handing the text BACK rather than storing it is the useful part: a scanned
+    PDF with no text layer looks identical to a working one until someone tries
+    to read it, and this way the operator sees what was actually extracted —
+    and can fix it — before an interview is built on top of it.
+    """
+    _signed_in(authorization)
+
+    raw = await file.read()
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(400, "That file is too large — 5 MB maximum.")
+
+    text = _text_from_upload(file, raw)
+    return {"filename": file.filename, "text": text, "chars": len(text)}
 
 
 @app.post("/session/{session_id}/prepare")

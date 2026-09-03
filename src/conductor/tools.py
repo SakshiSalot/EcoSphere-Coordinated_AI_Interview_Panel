@@ -13,6 +13,7 @@ import json
 import logging
 
 from src.conductor.personas import all_roles
+from src.conductor.scenarios import SCENARIOS
 from src.state.session import SessionState
 
 log = logging.getLogger("tools")
@@ -20,6 +21,12 @@ log = logging.getLogger("tools")
 # Every persona that exists, so adding one to personas.yaml immediately makes
 # it a valid handoff target with no code change.
 ROLES = all_roles()
+
+# The scenario ids, as an enum in the schema rather than a free string. A model
+# handed `{"scenario_id": "string"}` invents plausible ids — "difficult_customer"
+# — which used to set `active_scenario` to something no lookup could resolve,
+# locking the floor to a role-play that did not exist.
+SCENARIO_IDS = [s.id for s in SCENARIOS]
 
 
 def _fn(name: str, description: str, properties: dict, required: list[str]) -> dict:
@@ -85,9 +92,20 @@ TOOL_SCHEMAS = [
     ),
     _fn(
         "launch_scenario",
-        "Start a role-play scenario. You keep the floor until it resolves.",
-        {"scenario_id": {"type": "string"}},
+        "Start a role-play scenario from the list in your instructions. You "
+        "keep the floor until it resolves, and no other interviewer speaks.",
+        {"scenario_id": {"type": "string", "enum": SCENARIO_IDS}},
         ["scenario_id"],
+    ),
+    _fn(
+        "end_scenario",
+        "End the role-play you are running and step back out of character. "
+        "Call this as soon as it resolves.",
+        {"outcome": {
+            "type": "string",
+            "description": "One sentence on what the candidate actually did.",
+        }},
+        ["outcome"],
     ),
     _fn(
         "record_evidence",
@@ -181,9 +199,59 @@ def _adjust_difficulty(s: SessionState, a: dict) -> dict:
 
 
 def _launch_scenario(s: SessionState, a: dict) -> dict:
-    s.active_scenario = a.get("scenario_id", "")
+    """Start a role-play, if there is one by that name.
+
+    Unknown ids are REFUSED rather than stored. Setting `active_scenario` to
+    whatever the model said locks the floor to a role-play with no content
+    behind it — the persona has nothing to play, and every other interviewer is
+    silenced for the rest of the interview.
+    """
+    from src.conductor.scenarios import by_id
+
+    scenario = by_id(a.get("scenario_id", ""))
+    if scenario is None:
+        return {"ok": False, "error": "unknown scenario"}
+    if scenario.owner != s.floor_holder:
+        # Each persona runs its own. The customer's outage role-play in the
+        # technical interviewer's hands is two personas doing one job.
+        return {"ok": False, "error": "that scenario belongs to another interviewer"}
+    if s.active_scenario:
+        return {"ok": False, "error": "a scenario is already running"}
+
+    s.active_scenario = scenario.id
     s.scenario_owner = s.floor_holder
+    s.scenario_turns = 0
+    log.info("scenario %s launched by %s", scenario.id, s.scenario_owner)
     return {"ok": True, "scenario": s.active_scenario, "owner": s.scenario_owner}
+
+
+def _end_scenario(s: SessionState, a: dict) -> dict:
+    """Release the floor. The other half of launch, and it was missing."""
+    if not s.active_scenario:
+        return {"ok": False, "error": "no scenario is running"}
+
+    turn = s.turns.last_candidate()
+    outcome = (a.get("outcome") or "").strip()
+    if outcome:
+        # The role-play is only worth running if it produced evidence, so what
+        # the candidate did is recorded against the competency it was probing
+        # rather than evaporating with the character.
+        from src.conductor.scenarios import by_id
+
+        scenario = by_id(s.active_scenario)
+        s.evidence.add(
+            turn_id=turn.turn_id if turn else 0,
+            competency=(scenario.probes[0] if scenario else "behaviour"),
+            concept=f"role-play: {scenario.title if scenario else s.active_scenario}",
+            quote=outcome[:300],
+            polarity="supports",
+        )
+
+    log.info("scenario %s ended after %d exchanges", s.active_scenario, s.scenario_turns)
+    ended, s.active_scenario = s.active_scenario, None
+    s.scenario_owner = None
+    s.scenario_turns = 0
+    return {"ok": True, "ended": ended}
 
 
 def _record_evidence(s: SessionState, a: dict) -> dict:
@@ -206,5 +274,6 @@ _HANDLERS = {
     "flag_contradiction": _flag_contradiction,
     "adjust_difficulty": _adjust_difficulty,
     "launch_scenario": _launch_scenario,
+    "end_scenario": _end_scenario,
     "record_evidence": _record_evidence,
 }

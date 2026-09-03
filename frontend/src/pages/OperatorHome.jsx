@@ -16,6 +16,7 @@ export default function OperatorHome() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [interviews, setInterviews] = useState(null);
+  const [jobs, setJobs] = useState(null);
   const [error, setError] = useState("");
   const [removing, setRemoving] = useState("");
 
@@ -40,21 +41,74 @@ export default function OperatorHome() {
     api.interviews()
       .then((r) => setInterviews(r.interviews))
       .catch((e) => setError(e.message));
+    // A failure here must not take the interview list down with it — the two
+    // are independent, and an operator with no openings still has interviews.
+    api.jobs().then((r) => setJobs(r.jobs)).catch(() => setJobs([]));
   }, []);
 
   const awaiting = interviews?.filter((i) => i.status === "ended" && !i.decision) ?? [];
+
+  // Interviews curated under an opening are shown on that opening's
+  // leaderboard, where they can be compared. Listing them here as well would
+  // put the same candidate on two screens with two different meanings.
+  const loose = interviews?.filter((i) => !i.job_id) ?? [];
 
   return (
     <main className="page">
       <div className="stack">
         <div className="head">
           <div>
-            <h1>Interviews</h1>
+            <h1>Hiring</h1>
             <p className="sub">Signed in as {user.full_name || user.username}</p>
           </div>
+          <button className="btn-primary" style={{ marginLeft: "auto" }}
+                  onClick={() => navigate("/jobs/new")}>
+            New opening
+          </button>
         </div>
 
         {error && <div className="notice error">{error}</div>}
+
+        {/* --- openings --- */}
+        {jobs === null ? null : jobs.length === 0 ? (
+          <div className="empty">
+            <h3>No openings yet</h3>
+            <p className="small" style={{ maxWidth: "50ch", margin: "0 auto 20px" }}>
+              An opening holds one advert and however many applicants. Every
+              interview under it is built from the same advert, which is what
+              makes the candidates comparable to each other.
+            </p>
+            <button className="btn-primary" onClick={() => navigate("/jobs/new")}>
+              Create an opening
+            </button>
+          </div>
+        ) : (
+          <div className="list">
+            {jobs.map((j) => (
+              <button
+                key={j.job_id}
+                className="item"
+                onClick={() => navigate(`/jobs/${encodeURIComponent(j.job_id)}`)}
+              >
+                <div className="top">
+                  <span className="title">{j.title}</span>
+                  <span className="badges">
+                    {j.coding_enabled ? (
+                      <span className="badge ready">Talk + code</span>
+                    ) : (
+                      <span className="badge ready">Conversation only</span>
+                    )}
+                  </span>
+                </div>
+                <span className="meta">
+                  {j.candidates} candidate{j.candidates === 1 ? "" : "s"} ·{" "}
+                  {j.completed} complete
+                  {j.candidates === 0 && " — add one to get an invite code"}
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
 
         {awaiting.length > 0 && (
           <div className="notice info">
@@ -67,19 +121,22 @@ export default function OperatorHome() {
           <div className="center" style={{ padding: 40 }}><span className="spinner" /></div>
         )}
 
-        {interviews?.length === 0 && (
-          <div className="empty">
-            <h3>No interviews yet</h3>
-            <p className="small">
-              Set one up with <code>scripts/panel.py</code> or the setup endpoint,
-              and it will appear here as soon as it is prepared.
-            </p>
+        {loose.length > 0 && (
+          <div className="head" style={{ marginTop: 10 }}>
+            <div>
+              <h2>Interviews outside an opening</h2>
+              <p className="sub" style={{ marginTop: 4 }}>
+                Started by a candidate directly, or set up from the terminal.
+                These are not ranked — there is no shared advert to rank them
+                against.
+              </p>
+            </div>
           </div>
         )}
 
-        {interviews?.length > 0 && (
+        {loose.length > 0 && (
           <div className="list">
-            {interviews.map((it) => {
+            {loose.map((it) => {
               const scored = typeof it.score === "number";
               return (
                 <div

@@ -602,7 +602,12 @@ def test_quota_breaker() -> None:
     finally:
         judge._quota_exhausted_until = saved
 
-    check("the breaker releases once the cooldown passes", judge.available())
+    # Asserted against the BREAKER, not against `available()`. The latter is
+    # also false when no GEMINI_API_KEY is set, so checking it here made this
+    # test pass on a machine with credentials and fail on a fresh clone — where
+    # it would have been reporting a missing key as a broken circuit breaker.
+    check("the breaker releases once the cooldown passes",
+          time.monotonic() >= judge._quota_exhausted_until)
 
 
 # --- live: does it actually discriminate? -------------------------------

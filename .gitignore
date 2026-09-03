@@ -15,7 +15,15 @@ out/
 sessions/
 *.log
 
-/docs
+# Working notes, generated PDFs and — importantly — a file of Agora REST keys
+# live here. Ignored wholesale, then the deployment guide is let back in: it is
+# the one thing in docs/ that somebody cloning this repo actually needs, and
+# ignoring the directory meant it shipped to nobody.
+#
+# The pattern has to be /docs/* rather than /docs. Git does not descend into an
+# excluded DIRECTORY, so a negation inside one never matches.
+/docs/*
+!/docs/DEPLOY.md
 
 # os
 .DS_Store

@@ -26,6 +26,8 @@ import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
+from pydantic import BaseModel
+
 from src.analysis import allocation, judge, rubrics, scorer
 from src.state.models import AnswerScore
 from src.state.session import SessionState
@@ -345,6 +347,165 @@ def on_answer_recorded(session: SessionState, answer_turn_id: int) -> None:
     a model call taking seconds, and the conversation is holding a lock.
     """
     _submit("marking", mark_answer, session, answer_turn_id)
+    _submit("consistency", check_consistency, session, answer_turn_id)
+
+
+# The most a single answer will be compared against. An interview of twenty
+# answers all about latency would otherwise cost twenty judge calls on the last
+# turn alone. Newest first, because a candidate who changes their story usually
+# changes it from the version they gave a minute ago.
+MAX_COMPARISONS = 2
+
+
+class _Contradiction(BaseModel):
+    """Whether two statements by the same person can both be true."""
+
+    contradicts: bool
+    quote_earlier: str
+    quote_later: str
+    why: str
+
+
+def _check_against_resume(session: SessionState, turn, answer_turn_id: int) -> bool:
+    """The qualitative half of the CV check. Returns True if it flagged.
+
+    The inline detector catches an outright disowning — "I've never used
+    Redis" against a CV that lists Redis. It cannot catch the softer and more
+    common version: a CV claiming they LED the migration and an answer making
+    clear they watched it. That needs reading, which is what this is for.
+
+    Skipped when the answer is short. "Yes, that's right" cannot contradict a
+    CV, and spending a model call to establish that on every acknowledgement
+    would double the cost of the interview for nothing.
+    """
+    from src.analysis import claims as claim_check
+    from src.conductor.turn import _already_flagged  # noqa: F401 — shared rule
+
+    resume = (session.candidate.resume_text or "").strip()
+    if not resume or len(turn.text.split()) < 12:
+        return False
+
+    # The deterministic tier already raised this turn: do not spend a call to
+    # say the same thing twice, and do not let two tiers double-flag one answer.
+    if any(f.kind == "contradiction" and f.turn_id == answer_turn_id
+           for f in session.flags.all()):
+        return False
+
+    try:
+        verdict = judge.structured(
+            claim_check.resume_judge_prompt(resume, turn.text, answer_turn_id),
+            _Contradiction,
+            what=f"cv-consistency/turn-{answer_turn_id}",
+            max_output_tokens=600,
+        )
+    except judge.JudgeUnavailable:
+        return False
+
+    if not verdict.contradicts:
+        return False
+    if not (claim_check.verified(verdict.quote_earlier, resume)
+            and claim_check.verified(verdict.quote_later, turn.text)):
+        log.warning("turn %d: CV contradiction discarded — could not be quoted",
+                    answer_turn_id)
+        return False
+
+    session.flags.add(
+        turn_id=answer_turn_id,
+        kind="contradiction",
+        detail=f"Against their CV: {verdict.why}",
+        quote=verdict.quote_earlier,
+        quote_b=verdict.quote_later,
+        ref_turn_id=None,      # the other side is the CV, not a turn
+        source="judge",
+    )
+    log.info("turn %d contradicts the CV: %s", answer_turn_id, verdict.why[:80])
+    return True
+
+
+def check_consistency(session: SessionState, answer_turn_id: int) -> None:
+    """Contradictions tier two: the ones arithmetic cannot see.
+
+    "I led that migration" against "I wasn't really involved in the migration"
+    has no numbers in it, and no regular expression will ever catch it. This
+    will, at the cost of a model call — so the call is only made for answers
+    that touch a topic the candidate has already spoken about, which is both a
+    cheap filter and the same narrowing that makes the judgement reliable.
+
+    THE QUOTES ARE VERIFIED against the two turns before anything is recorded.
+    A contradiction is the most damaging thing this panel can assert about
+    somebody, and a model asked to quote will paraphrase; a flag citing words
+    the candidate never said would be worse than missing the contradiction
+    entirely.
+    """
+    from src.analysis import claims as claim_check
+    from src.conductor.turn import _already_flagged
+
+    turn = session.turns.get(answer_turn_id)
+    if turn is None or not turn.is_candidate:
+        return
+
+    # The CV first. It is the claim the candidate made in writing, it is the
+    # contradiction an interviewer most wants raised while they are still in
+    # the room, and it needs no earlier answer to exist — so it is checkable
+    # from the very first turn, when nothing else here is.
+    if _check_against_resume(session, turn, answer_turn_id):
+        return
+
+    topics = {m.topic for m in claim_check.measurements(turn.text)}
+    # No quantified topic is not a reason to skip: the qualitative
+    # contradictions are exactly the ones with no numbers. Fall back to
+    # comparing against the most recent substantial answers.
+    earlier = [
+        t for t in session.turns.by_speaker("candidate")
+        if t.turn_id < answer_turn_id and len(t.text.split()) >= 12
+    ]
+    if topics:
+        related = [
+            t for t in earlier
+            if topics & {m.topic for m in claim_check.measurements(t.text)}
+        ]
+        earlier = related or earlier
+
+    for prior in list(reversed(earlier))[:MAX_COMPARISONS]:
+        if _already_flagged(session, prior.turn_id, answer_turn_id):
+            continue
+        try:
+            verdict = judge.structured(
+                claim_check.judge_prompt(
+                    prior.text, turn.text, prior.turn_id, answer_turn_id
+                ),
+                _Contradiction,
+                what=f"consistency/turn-{answer_turn_id}",
+                max_output_tokens=600,
+            )
+        except judge.JudgeUnavailable as exc:
+            log.info("consistency check skipped for turn %d: %s",
+                     answer_turn_id, exc)
+            return
+
+        if not verdict.contradicts:
+            continue
+
+        if not (claim_check.verified(verdict.quote_earlier, prior.text)
+                and claim_check.verified(verdict.quote_later, turn.text)):
+            log.warning(
+                "turn %d: contradiction discarded — the judge could not quote it",
+                answer_turn_id,
+            )
+            continue
+
+        session.flags.add(
+            turn_id=answer_turn_id,
+            kind="contradiction",
+            detail=verdict.why,
+            quote=verdict.quote_earlier,
+            quote_b=verdict.quote_later,
+            ref_turn_id=prior.turn_id,
+            source="judge",
+        )
+        log.info("turn %d contradicts turn %d (judge): %s",
+                 answer_turn_id, prior.turn_id, verdict.why[:80])
+        return
 
 
 def _submit(what: str, fn, *args) -> None:

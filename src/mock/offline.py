@@ -96,6 +96,14 @@ def _stub_providers() -> None:
     providers.complete = complete
     providers.complete_with_tools = lambda m, t, **kw: (_question_for(m), [])
 
+    # Stubbed too, and this is not cosmetic. `speak()` branches on it, so
+    # leaving the real one in place meant this suite exercised a DIFFERENT code
+    # path depending on whether the person running it happened to have keys in
+    # .env — passing on a developer's laptop and failing on a fresh clone,
+    # which is precisely the machine the README tells people to run it on
+    # first. Stubbing it makes the run identical everywhere.
+    providers.available = lambda: True
+
 
 # --- the checks ---------------------------------------------------------
 
@@ -268,6 +276,282 @@ def test_contradiction_routing() -> None:
     )
     check("a contradiction is only routed once", decide_floor(session)[0] != "technical"
           or session.flags.recent("contradiction", 1)[0].routed)
+
+
+def test_contradiction_detection() -> None:
+    """The half that used to be missing.
+
+    Routing a contradiction was always tested; DETECTING one was not, because
+    nothing detected one — the flag above is hand-written into the session, and
+    in a real interview it only appeared if the model volunteered a tool call,
+    which it essentially never did. These checks run the real detector.
+    """
+    print("\n\033[1mcontradictions are detected, not waited for\033[0m")
+    from src.analysis import claims
+    from src.conductor.turn import observe
+
+    session = reset_session("t-detect")
+    a = session.turns.add("candidate", CLAIM)
+    observe(session, a, CLAIM)
+
+    check("a quantified answer files a claim", len(session.claims) >= 1,
+          str(len(session.claims)))
+    check("filed under a topic the next answer can be compared against",
+          session.claims.all()[0].topic == "latency",
+          session.claims.all()[0].topic)
+
+    session.turns.add("technical", "And what broke first?")
+    b = session.turns.add("candidate", CONTRADICTION)
+    observe(session, b, CONTRADICTION)
+
+    found = [f for f in session.flags.all() if f.kind == "contradiction"]
+    check("the contradiction is caught with no model call", len(found) == 1,
+          str(len(found)))
+    if found:
+        f = found[0]
+        check("it points back at the turn it conflicts with", f.ref_turn_id == a,
+              str(f.ref_turn_id))
+        check("and carries BOTH quotes, verbatim from the transcript",
+              f.quote in CLAIM and f.quote_b in CONTRADICTION)
+        check("raised by the deterministic tier", f.source == "heuristic", f.source)
+
+    check("the floor goes back to whoever asked",
+          decide_floor(session)[0] == "technical")
+
+    # The same answer twice must not raise a second flag.
+    c = session.turns.add("candidate", CONTRADICTION)
+    observe(session, c, CONTRADICTION)
+    again = [f for f in session.flags.all()
+             if f.kind == "contradiction" and f.ref_turn_id == a and f.turn_id == b]
+    check("one flag per pair of turns", len(again) == 1, str(len(again)))
+
+    print("\n\033[1m...and the four ways that check must NOT fire\033[0m")
+    pairs = [
+        ("different subjects, same topic",
+         "We handle 12k events per second at peak.",
+         "The retry queue only does about 3k per second."),
+        ("rounding is not lying",
+         "Our p99 latency was 60ms.",
+         "The p99 latency sits at about 65ms now."),
+        ("a number is not a unit",
+         "The migration took us 3 weeks.",
+         "We had 3 engineers on the platform team."),
+        ("the same quantity said two ways",
+         "It took about 400 milliseconds at p99 on the checkout path.",
+         "Checkout p99 was 0.4 seconds."),
+    ]
+    for name, first, second in pairs:
+        m1, m2 = claims.measurements(first), claims.measurements(second)
+        conflict = (claims.conflict_between(m1[0], m2[0], 1)
+                    if m1 and m2 else None)
+        check(name, conflict is None, str(conflict))
+
+    # Describing an improvement is the single most common shape of a real
+    # answer, and reading it as a contradiction would flag every good one.
+    improvement = claims.measurements("We cut p99 from 400ms to 60ms.")
+    check("'from X to Y' is one claim, not two that disagree",
+          len(improvement) == 1 and abs(improvement[0].value - 0.06) < 1e-9,
+          str([(m.raw, m.value) for m in improvement]))
+
+
+RESUME = """Harsh Raj - Backend Engineer
+Built a payments retry layer in Python with idempotency keys in Redis.
+Migrated ingestion to RabbitMQ and instrumented it with Prometheus.
+Sharded Postgres on tenant id to cut checkout latency."""
+
+
+def test_resume_contradiction() -> None:
+    """The CV is a claim too, and the one candidates actually contradict."""
+    print("\n\033[1mthe CV is a claim: disowning it is a contradiction\033[0m")
+    from src.analysis import claims
+    from src.conductor.turn import observe
+
+    terms = claims.resume_terms(RESUME)
+    check("distinctive claims are indexed from the CV",
+          {"redis", "python", "postgres"} <= terms, str(sorted(terms)))
+    # A CV is bullet points, not prose, so every line opens with a capitalised
+    # verb. Left in, "Migrated" becomes a technology the candidate can then be
+    # accused of disowning.
+    check("and bullet-point verbs are not",
+          not ({"built", "migrated", "sharded"} & terms), str(sorted(terms)))
+    check("nor job titles and section headings",
+          not ({"engineer", "backend", "experience"} & terms), str(sorted(terms)))
+
+    session = reset_session("t-cv")
+    session.roles = ["technical", "product"]
+    session.floor_holder = "technical"
+    session.candidate.resume_text = RESUME
+
+    session.turns.add("technical", "Your CV mentions Redis. Walk me through it.")
+    said = "Honestly I've never really used Redis, that was someone else."
+    t = session.turns.add("candidate", said)
+    observe(session, t, said)
+
+    found = [f for f in session.flags.all() if f.kind == "contradiction"]
+    check("disowning something the CV claims is caught", len(found) == 1,
+          str(len(found)))
+    if found:
+        f = found[0]
+        check("the CV's own line is quoted as evidence",
+              "Redis" in f.quote and f.quote in RESUME, f.quote)
+        check("and what they said is quoted back", f.quote_b in said)
+        check("it points at no earlier turn, because the CV is not a turn",
+              f.ref_turn_id is None, str(f.ref_turn_id))
+    check("the interviewer holding the floor raises it",
+          decide_floor(session)[0] == "technical")
+
+    print("\n\033[1m...and honest uncertainty is NOT disowning anything\033[0m")
+    question = "Tell me about the Redis work."
+    for name, answer in [
+        ("not remembering a figure",
+         "I don't know the exact number of keys we held in Redis."),
+        ("uncertainty about a choice",
+         "I don't know if Redis was the right call there, honestly."),
+        ("not remembering a detail",
+         "I don't remember how much Redis memory we used."),
+    ]:
+        check(name, claims.resume_conflict(answer, question, terms) is None,
+              str(claims.resume_conflict(answer, question, terms)))
+
+    for name, answer in [
+        ("never used it", "I've never used Redis."),
+        ("not familiar with it", "I'm not familiar with Redis at all."),
+        ("someone else did it",
+         "I never worked on the Postgres sharding, that was another team."),
+    ]:
+        check(name + " IS caught",
+              claims.resume_conflict(answer, question, terms) is not None)
+
+    # Naming nothing is the common shape: the interviewer names the technology
+    # and the candidate answers "I never touched that".
+    question_names_it = "How did you use Redis for idempotency?"
+    check("a bare 'that' takes its subject from the question",
+          claims.resume_conflict("I never touched that, to be honest.",
+                                 question_names_it, terms) is not None)
+
+    # Both of these were wrong in the first version, and only showed up when
+    # it was run against a real CV rather than this fixture.
+    check("but an answer naming its OWN subject does not borrow the question's",
+          claims.resume_conflict("I've never worked with that kind of data.",
+                                 "Tell me about the Redis work.", terms) is None,
+          str(claims.resume_conflict("I've never worked with that kind of data.",
+                                     "Tell me about the Redis work.", terms)))
+    named = claims.resume_conflict("I've never really used Redis.",
+                                   "Tell me about Postgres sharding.", terms)
+    check("and what they named beats what the question named",
+          named is not None and named[1] == "redis", str(named))
+
+
+def test_told_two_interviewers_differently() -> None:
+    """Saying one thing to Priya and another to Arjun.
+
+    This only catches a candidate out because the panel shares one memory —
+    which is the capability demonstrating itself rather than being described.
+    """
+    print("\n\033[1mtelling two interviewers different things\033[0m")
+    from src.conductor.turn import observe
+
+    session = reset_session("t-cross")
+    session.roles = ["technical", "product"]
+    session.floor_holder = "technical"
+
+    session.turns.add("technical", "How big was the team?")
+    first = "The platform team was 3 engineers including me."
+    a = session.turns.add("candidate", first)
+    observe(session, a, first)
+
+    session.floor_holder = "product"
+    session.turns.add("product", "Who did you have to convince?")
+    second = "I had to bring the whole platform team along, 12 engineers."
+    b = session.turns.add("candidate", second)
+    observe(session, b, second)
+
+    found = [f for f in session.flags.all() if f.kind == "contradiction"]
+    check("the conflict is caught across two interviewers", len(found) == 1,
+          str(len(found)))
+    if found:
+        check("and the report names both of them by name",
+              "Priya" in found[0].detail and "Arjun" in found[0].detail,
+              found[0].detail)
+        check("with each answer quoted",
+              found[0].quote == first and found[0].quote_b == second)
+
+    # The same two answers to the SAME interviewer are still a contradiction,
+    # but there is nobody to contrast — the sentence must not appear.
+    session = reset_session("t-same")
+    session.roles = ["technical"]
+    session.floor_holder = "technical"
+    session.turns.add("technical", "How big was the team?")
+    a = session.turns.add("candidate", first)
+    observe(session, a, first)
+    session.turns.add("technical", "And who signed it off?")
+    b = session.turns.add("candidate", second)
+    observe(session, b, second)
+    same = [f for f in session.flags.all() if f.kind == "contradiction"]
+    check("one interviewer hearing both is still caught", len(same) == 1)
+    if same:
+        check("without inventing a second interviewer",
+              "told" not in same[0].detail, same[0].detail)
+
+
+def test_scenarios() -> None:
+    print("\n\033[1mrole-play scenarios start, and — the new part — stop\033[0m")
+    from src.conductor import scenarios
+    from src.conductor.personas import all_roles, persona_prompt
+    from src.conductor.tools import handle_tool_call
+
+    check("every scenario belongs to a persona that exists",
+          all(s.owner in all_roles() for s in scenarios.SCENARIOS))
+    check("and says what it is evidence of",
+          all(s.probes and s.resolve_when for s in scenarios.SCENARIOS))
+
+    session = reset_session("t-scenario")
+    session.roles = ["behavioural", "technical"]
+    session.floor_holder = "behavioural"
+
+    bad = handle_tool_call(session, "launch_scenario", {"scenario_id": "invented"})
+    check("an invented scenario id is refused", bad["ok"] is False, str(bad))
+    check("and does not lock the floor", session.active_scenario is None)
+
+    wrong = handle_tool_call(session, "launch_scenario",
+                             {"scenario_id": "angry_customer_outage"})
+    check("a persona cannot run another persona's role-play",
+          wrong["ok"] is False, str(wrong))
+
+    ok = handle_tool_call(session, "launch_scenario",
+                          {"scenario_id": "slipped_deadline"})
+    check("its own launches", ok["ok"] is True, str(ok))
+    check("and holds the floor", decide_floor(session)[0] == "behavioural")
+
+    prompt = persona_prompt("behavioural", scenario=session.active_scenario)
+    check("the persona is told to stay in character",
+          "ROLE-PLAY" in prompt and "stakeholder" in prompt.lower())
+    check("and is not offered a menu while inside one",
+          "use when:" not in prompt)
+
+    ended = handle_tool_call(session, "end_scenario",
+                             {"outcome": "Told me the impact and gave a new date."})
+    check("end_scenario releases the floor", ended["ok"] is True, str(ended))
+    check("the lock is actually cleared", session.active_scenario is None)
+    check("and what they did is kept as evidence", len(session.evidence) >= 1)
+
+    # The failure that matters: the model never calls end_scenario.
+    session = reset_session("t-scenario-stuck")
+    session.roles = ["behavioural", "technical"]
+    session.floor_holder = "behavioural"
+    handle_tool_call(session, "launch_scenario", {"scenario_id": "slipped_deadline"})
+    for _ in range(scenarios.MAX_EXCHANGES + 2):
+        decide_floor(session)
+    check("a forgotten end_scenario cannot hold the floor forever",
+          session.active_scenario is None, str(session.active_scenario))
+    check("and the panel is free to rotate again",
+          session.scenario_owner is None)
+
+    offered = persona_prompt("behavioural")
+    check("a persona is offered only its own scenarios",
+          "slipped_deadline" in offered and "angry_customer_outage" not in offered)
+    check("a persona with none is offered none",
+          "ROLE-PLAY" not in persona_prompt("technical"))
 
 
 # --- 3. the difficulty ladder -------------------------------------------
@@ -603,6 +887,10 @@ def main() -> int:
     test_handoff()
     test_vague_holds_floor()
     test_contradiction_routing()
+    test_contradiction_detection()
+    test_resume_contradiction()
+    test_told_two_interviewers_differently()
+    test_scenarios()
     test_difficulty_both_directions()
     test_question_plan()
     test_repeat_request()

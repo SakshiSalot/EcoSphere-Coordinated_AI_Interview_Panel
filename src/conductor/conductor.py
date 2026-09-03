@@ -12,6 +12,7 @@ which a model gives you.
 
 import logging
 
+from src.conductor import scenarios
 from src.conductor.personas import active_roles
 from src.state.session import SessionState
 
@@ -56,8 +57,21 @@ def decide_floor(session: SessionState) -> tuple[str, str]:
         return _set(session, current, f"candidate asked to {session.pending_meta}", current)
 
     # 1 — a role-play owns the floor until it completes
+    #
+    # Bounded, and the bound is the point. `end_scenario` is a tool the model
+    # is asked to call, and a tool the model is asked to call is a request, not
+    # a guarantee — a persona that forgets it would otherwise hold the floor
+    # for the rest of the interview and the panel would silently become one
+    # interviewer. The counter is the mechanism; the tool is the courtesy.
     if session.active_scenario and session.scenario_owner in roles:
-        return _set(session, session.scenario_owner, "scenario in progress", current)
+        session.scenario_turns += 1
+        if session.scenario_turns <= scenarios.MAX_EXCHANGES:
+            return _set(session, session.scenario_owner, "scenario in progress", current)
+        log.info("scenario %s ran past %d exchanges — releasing the floor",
+                 session.active_scenario, scenarios.MAX_EXCHANGES)
+        session.active_scenario = None
+        session.scenario_owner = None
+        session.scenario_turns = 0
 
     # 2 — an explicit handoff request from a persona
     if session.pending_handoff:

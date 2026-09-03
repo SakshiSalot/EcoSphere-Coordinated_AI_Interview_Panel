@@ -72,6 +72,43 @@ export const api = {
   register: (fields) => request("POST", "/auth/register", fields),
   me:       () => request("GET", "/auth/me"),
 
+  // Openings, and the interviews curated under them.
+  jobs:         () => request("GET", "/jobs"),
+  createJob:    (fields) => request("POST", "/jobs", fields),
+  job:          (id) => request("GET", `/jobs/${encodeURIComponent(id)}`),
+  addCandidate: (id, fields) =>
+    request("POST", `/jobs/${encodeURIComponent(id)}/candidates`, fields),
+  claim:        (code) => request("POST", "/interviews/claim", { code }),
+
+  // The coding round. Taken separately from the conversation, so every call
+  // is against the database rather than a live session.
+  coding:       (id) => request("GET", `/session/${encodeURIComponent(id)}/coding`),
+  codingSave:   (id, source) =>
+    request("POST", `/session/${encodeURIComponent(id)}/coding/save`, { source }),
+  codingRun:    (id, source, stdin) =>
+    request("POST", `/session/${encodeURIComponent(id)}/coding/run`, { source, stdin }),
+  codingSubmit: (id, source) =>
+    request("POST", `/session/${encodeURIComponent(id)}/coding/submit`, { source }),
+
+  /* Multipart, so it bypasses `request` — setting Content-Type by hand on a
+   * FormData body strips the boundary the server needs to parse it. */
+  extract: async (file) => {
+    const form = new FormData();
+    form.append("file", file);
+    const held = token.get();
+    const res = await fetch("/extract", {
+      method: "POST",
+      headers: held ? { Authorization: `Bearer ${held}` } : {},
+      body: form,
+    });
+    const payload = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new ApiError(payload.detail || `Could not read that file (${res.status}).`,
+                         res.status);
+    }
+    return payload;
+  },
+
   interviews: () => request("GET", "/interviews"),
   assessment: (id) => request("GET", `/interviews/${encodeURIComponent(id)}/assessment`),
   removeInterview: (id) => request("DELETE", `/interviews/${encodeURIComponent(id)}`),
@@ -86,6 +123,30 @@ export const api = {
     request("POST", "/profile/github", { github_username }),
 
   integrity: (id) => request("GET", `/session/${encodeURIComponent(id)}/integrity`),
+
+  /* The assessment as a PDF. Fetched with the token and handed to the browser
+   * as a blob rather than linked directly: the endpoint needs an Authorization
+   * header, and a plain <a href> cannot send one. */
+  reportPdf: async (id) => {
+    const held = token.get();
+    const res = await fetch(`/interviews/${encodeURIComponent(id)}/report.pdf`, {
+      headers: held ? { Authorization: `Bearer ${held}` } : {},
+    });
+    if (!res.ok) {
+      const payload = await res.json().catch(() => ({}));
+      throw new ApiError(payload.detail || `Could not build the report (${res.status}).`,
+                         res.status);
+    }
+    const name = (res.headers.get("Content-Disposition") || "")
+      .match(/filename="([^"]+)"/)?.[1] || "assessment.pdf";
+    const url = URL.createObjectURL(await res.blob());
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    a.click();
+    // Revoked on a delay: revoking immediately races the download in Safari.
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+  },
 
   joinCredentials: (id) => request("GET", `/session/${encodeURIComponent(id)}/join`),
   startPanel:      (id, channel) =>

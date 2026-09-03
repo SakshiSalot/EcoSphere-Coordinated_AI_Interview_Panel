@@ -1,9 +1,67 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 import { useAuth } from "../auth";
 
 const LABEL = { ready: "Ready", live: "In progress", ended: "Completed" };
+
+/* What is left to do, from the candidate's side.
+ *
+ * The two rounds are taken separately — possibly days apart — so "Completed"
+ * against an interview with a coding exercise outstanding would send someone
+ * away thinking they were finished. The stage says which round is next, and
+ * the button goes there. */
+const STAGE = {
+  invited:    { text: "Not started", next: "Start the conversation" },
+  voice_done: { text: "Conversation done", next: "Take the coding round" },
+  coding_done:{ text: "Coding done", next: "Take the conversation" },
+  complete:   { text: "Both rounds complete", next: null },
+};
+
+/* Entering the code an employer sent. Separate from signing in on purpose: the
+ * account is theirs and lasts, the code is for one interview. */
+function ClaimCode({ onClaimed }) {
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await api.claim(code.trim().toUpperCase());
+      setCode("");
+      onClaimed();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="card claim" onSubmit={submit}>
+      <div className="field" style={{ flex: 1 }}>
+        <label htmlFor="code">Have an interview code?</label>
+        <input
+          id="code" value={code}
+          onChange={(e) => setCode(e.target.value.toUpperCase())}
+          placeholder="ABCD2345" maxLength={8} autoComplete="off"
+          style={{ fontFamily: "var(--mono)", letterSpacing: ".12em" }}
+        />
+        <p className="hint">
+          Eight characters, from the employer who invited you. It unlocks an
+          interview already written for your CV and their advert.
+        </p>
+      </div>
+      <button className="btn-primary" disabled={busy || code.trim().length < 4}>
+        {busy ? <span className="spinner" /> : "Open it"}
+      </button>
+      {error && <div className="notice error" style={{ flexBasis: "100%" }}>{error}</div>}
+    </form>
+  );
+}
 
 /* What a candidate sees: their own interviews, and no scores.
  *
@@ -18,11 +76,27 @@ export default function CandidateHome() {
   const [error, setError] = useState("");
   const [starting, setStarting] = useState(false);
 
-  useEffect(() => {
+  const load = useCallback(() => {
     api.interviews()
       .then((r) => setInterviews(r.interviews))
       .catch((e) => setError(e.message));
   }, []);
+
+  useEffect(load, [load]);
+
+  /* Where a row goes depends on which round is outstanding. An interview
+   * curated by an employer already has its questions written, so it skips
+   * Prepare entirely — sending them there would ask for the CV the panel was
+   * built from. */
+  const open = (it) => {
+    if (it.stage === "voice_done" && it.coding) {
+      navigate(`/coding/${encodeURIComponent(it.session_id)}`);
+    } else if (it.stage === "invited" || it.stage === "coding_done") {
+      navigate(`/interview/${encodeURIComponent(it.session_id)}`);
+    } else {
+      navigate(`/prepare/${encodeURIComponent(it.session_id)}`);
+    }
+  };
 
   const start = async () => {
     setStarting(true);
@@ -98,13 +172,16 @@ export default function CandidateHome() {
           <div className="center" style={{ padding: 40 }}><span className="spinner" /></div>
         )}
 
+        <ClaimCode onClaimed={load} />
+
         {interviews?.length === 0 && (
           <div className="empty">
             <h3>Nothing here yet</h3>
             <p className="small" style={{ maxWidth: "46ch", margin: "0 auto 20px" }}>
-              Start one whenever you are ready. You will add your resume and the
-              job description first, so the panel asks about the role you
-              actually applied for.
+              Enter a code above if an employer sent you one. Otherwise start a
+              practice interview — you will add your resume and the job
+              description first, so the panel asks about the role you actually
+              applied for.
             </p>
             <button className="btn-primary" onClick={start} disabled={starting}>
               {starting ? <span className="spinner" /> : "Start an interview"}
@@ -114,28 +191,34 @@ export default function CandidateHome() {
 
         {interviews?.length > 0 && (
           <div className="list">
-            {interviews.map((it) => (
-              <button
-                key={it.session_id}
-                className="item"
-                onClick={() => navigate(`/prepare/${encodeURIComponent(it.session_id)}`)}
-                disabled={it.status === "ended"}
-              >
-                <div className="top">
-                  <span className="title">{it.job_title || "Interview"}</span>
-                  <span className="badges">
-                    <span className={`badge ${it.status}`}>
-                      {LABEL[it.status] || it.status}
+            {interviews.map((it) => {
+              const stage = STAGE[it.stage] || STAGE.invited;
+              const done = it.stage === "complete" || it.status === "ended";
+              return (
+                <button
+                  key={it.session_id}
+                  className="item"
+                  onClick={() => open(it)}
+                  disabled={done}
+                >
+                  <div className="top">
+                    <span className="title">{it.job_title || "Interview"}</span>
+                    <span className="badges">
+                      <span className={`badge ${done ? "ended" : it.status}`}>
+                        {done ? "Completed" : stage.text}
+                      </span>
                     </span>
+                  </div>
+                  <span className="meta">
+                    {done
+                      ? "Thank you — the result is with the hiring team."
+                      : stage.next === "Take the coding round"
+                        ? "Coding round outstanding. You can take it whenever suits you."
+                        : `${stage.next}. You will need a microphone.`}
                   </span>
-                </div>
-                <span className="meta">
-                  {it.status === "ended"
-                    ? "Completed — thank you. The result is with the hiring team."
-                    : "Add your resume and the job description, then join. You will need a microphone."}
-                </span>
-              </button>
-            ))}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>

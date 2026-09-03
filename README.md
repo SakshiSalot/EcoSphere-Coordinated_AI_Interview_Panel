@@ -95,13 +95,16 @@ python3.11 -m venv .venv
 make check
 ```
 
-**207 regression tests. No API keys, no network, no cost.** Three suites: 71
-for the conductor (floor control, the Priya→Arjun handoff, the difficulty
-ladder in both directions, repeat handling, the interview ending), 84 for the
-marking engine (rubric shape, quote verification, allocation arithmetic), and
-52 for monitoring and profile verification (event validation, the heartbeat
-gap, resume cross-checking, the ownership code). If this is green, the whole
-brain on your machine is intact.
+**273 regression tests. No API keys, no network, no cost.** Three suites: 122
+for the conductor (floor control, the Priya→Arjun handoff, contradiction
+detection, role-play scenarios, the difficulty ladder in both directions, the
+interview ending), 84 for the marking engine (rubric shape, quote verification,
+allocation arithmetic), and 67 for monitoring, profile verification and the
+written report. If this is green, the whole brain on your machine is intact.
+
+They pass with **no `.env` at all** — that is checked, in a container with no
+credentials in it, because "run this before touching any credentials" is only
+useful advice if it is true.
 
 Once you have model keys, three more that spend no Agora minutes:
 
@@ -175,6 +178,31 @@ once the question plan is covered, and tears the agents down.
 > so `--reload` firing mid-interview wipes the transcript and the question plan.
 > Use `make gateway` while writing code — a stale gateway silently serving old
 > code cost us an evening.
+
+### 6. Or use it the way an employer would
+
+`make serve` starts the tunnel, wires the addresses and serves the browser app
+at **http://localhost:7860**. The whole flow lives there:
+
+**As the operator** — *New opening*: paste the advert, choose whether there is
+a coding round and how the two rounds are weighted. Then *Add a candidate* for
+each applicant: drop their CV as a PDF, and their interview is written on the
+spot — spoken questions and a coding problem, both grounded in that CV against
+that advert. You get an eight-character code per candidate to send them.
+
+**As the candidate** — sign in, enter the code, take the conversation. The
+coding round is separate and can be taken later, from a different machine;
+the code is saved as they type.
+
+**Back as the operator** — the opening's leaderboard ranks whoever has
+finished, with the basis beside every score: how many questions they answered,
+how hard it got, and a warning when an interview is too thin to compare.
+Opening a row shows the marks, the quote behind each one, the integrity log and
+the candidate's GitHub. The hire decision is a button, recorded against your
+name.
+
+A round nobody has sat is never counted as zero — someone who has not taken the
+coding exercise has not failed it.
 
 ---
 
@@ -256,12 +284,15 @@ src/analysis/          the marking engine
    judge.py              Gemini access for marking — one model, or no score
    pipeline.py           the only file that knows about SessionState
    selftest.py           99 checks; --offline skips the ones that cost
+   claims.py             quantified claims, and when two cannot both be true
+src/conductor/scenarios.py  role-play content, and the cap that ends one
 src/integrity/         focus and camera signals — advisory, never a mark
    monitor.py            validates what the browser sends; builds the log
-   selftest.py           52 checks for monitoring and verification
+   selftest.py           67 checks for monitoring, verification and the report
 src/verify/            checking a candidate's public GitHub
+src/report/            the assessment as a filed PDF (WeasyPrint)
 src/coding/            the coding round: generated question, Judge0 sandbox
-src/mock/              AI candidate · full-interview harness · 71 offline tests
+src/mock/              AI candidate · full-interview harness · 100 offline tests
 scripts/               panel.py, the interruption gate, TTS probe
 frontend/src/integrity.js   the browser half — the camera never leaves it
 inputs/                job adverts and CVs
@@ -272,6 +303,56 @@ nothing else — role routing, handoff targets and the question planner all read
 that file at runtime.
 
 ---
+
+## Contradiction detection, and why it needed moving
+
+There was a `flag_contradiction` tool from the start, and it almost never
+fired. The reason is worth stating: asking a small model to notice a conflict
+with something said eleven turns ago, unprompted, while also conducting an
+interview, is asking it to do the thing it is worst at. It just keeps
+interviewing.
+
+There are **three** things a candidate can contradict, and only the third is
+what most people picture:
+
+1. **Their own CV.** The resume is a claim they made in writing. "Your CV says
+   you built the retry layer in Redis" / "I've never really used Redis" is a
+   contradiction, and it is the one an interviewer most wants raised while the
+   candidate is still in the room. The CV's distinctive claims are indexed by
+   shape at setup; a disclaimer next to one is caught inline, and the flag
+   quotes the line of the CV that makes the claim.
+2. **A different interviewer.** Telling Priya the team was three and Arjun it
+   was twelve only catches anyone out because this panel shares one memory —
+   so the flag says so: *"They told Priya one thing and Arjun another."*
+3. **Themselves, earlier.** The same measure, restated differently.
+
+Honest uncertainty is deliberately **not** any of them. "I don't know the exact
+number", "I don't know if that was the right call", "I don't remember how much
+memory we used" — all pass. A candidate punished for saying they cannot
+remember a figure learns to bluff, which is the opposite of the point.
+
+So the comparison was made narrow and the trigger mechanical, in two tiers:
+
+**Arithmetic, inline, no model.** Every answer is scanned for numbers with
+units, each filed under a topic — latency, throughput, team size, duration.
+When a later answer states a different outcome for a topic already quantified,
+that is a conflict a regular expression finds, on the turn it happens, so the
+conductor routes the challenge into the very next question. `ClaimLedger.by_topic()`
+was written on day one to make exactly this tractable, and until now nothing
+had ever written a claim into it.
+
+**The judge, asynchronously**, for the contradictions with no numbers in them —
+"I led that migration" against "I wasn't really involved in it". Both quotes
+are verified against the transcript before anything is recorded; a model asked
+to quote will paraphrase, and a flag citing words the candidate never said
+would be worse than missing the contradiction.
+
+False positives are the expensive failure here, so tier one requires the two
+claims to share subject wording as well as a topic and unit. Four cases it
+deliberately does **not** flag, each with a regression test: rounding
+("about 50ms" then "60ms"), the same quantity in different units, the same
+number under different units ("3 weeks" / "3 engineers"), and describing an
+improvement ("from 400ms to 60ms" is one claim, not two that disagree).
 
 ## Monitoring, and what it deliberately does not do
 

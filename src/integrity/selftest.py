@@ -284,8 +284,107 @@ def test_linkedin_claims_nothing() -> None:
     check("empty stays empty", gh.linkedin("")["status"] == "none")
 
 
+# --- the written report --------------------------------------------------
+
+
+def _report(**over) -> dict:
+    base = {
+        "session_id": "iv-test", "job_title": "Backend Engineer",
+        "candidate": "Test Person", "status": "ended", "decision": None,
+        "transcript": [
+            {"turn_id": 1, "speaker": "technical", "text": "Tell me about it."},
+            {"turn_id": 2, "speaker": "candidate", "text": "We cut p99 to 60ms."},
+        ],
+        "marked": True,
+        "assessment": {
+            "fraction": 0.62, "earned": 61.5, "total": 100, "available": 112.0,
+            "answers": 9, "penalties": 0.0,
+            "by_role": {"technical": {"earned": 40.0, "available": 60.0,
+                                      "fraction": 0.67}},
+            "evidence": [{"turn_id": 2, "role": "technical",
+                          "concept": "Names a measurement", "quote": "p99 to 60ms"}],
+            "flags": [],
+        },
+        "integrity": {"monitored": False, "signals": [], "coverage": {},
+                      "concern": "unknown", "headline": "No data.",
+                      "note": "An empty log is not a clean one."},
+        "candidate_profile": {"full_name": "Test Person"},
+        "note": None,
+    }
+    base.update(over)
+    return base
+
+
+def test_report_document() -> None:
+    print("\n\033[1mthe assessment renders as a document\033[0m")
+    from src.report import document
+
+    page = document.build_html(_report())
+    check("the candidate is named", "Test Person" in page)
+    check("the score is on it", "62%" in page, page[:0])
+    check("marks are broken down per interviewer", "Technical" in page)
+    check("evidence carries its quote", "p99 to 60ms" in page)
+    check("the transcript is appended", "Tell me about it." in page)
+    check("and the AI panel is disclosed on the document itself",
+          "every interviewer on this panel was an ai" in page.lower())
+    check("an unrecorded decision says so rather than implying one",
+          "No hiring decision has been recorded" in page)
+
+    # The bug this check exists for: `str(value or "")` prints a real zero as
+    # an empty cell, which reads as missing data rather than as none.
+    zeroed = _report(candidate_profile={
+        "full_name": "Zero Person",
+        "github": {
+            "username": "nobody", "url": "https://github.com/nobody",
+            "ownership": {"proven": False},
+            "profile": {"age_years": 0.2, "public_repos": 0},
+            "activity": {"original": 0, "forks": 0, "pushed_last_year": 0},
+            "resume_match": {"available": False},
+        },
+    })
+    page = document.build_html(zeroed)
+    check("a zero prints as a zero, not a blank", "0 / 0" in page,
+          [l for l in page.splitlines() if "Own /" in l][:1])
+
+    # Candidate answers are attacker-controlled text going into HTML.
+    nasty = _report(transcript=[
+        {"turn_id": 1, "speaker": "candidate",
+         "text": "<script>alert('x')</script> & \"quoted\""},
+    ])
+    page = document.build_html(nasty)
+    check("candidate text cannot inject markup",
+          "<script>" not in page and "&lt;script&gt;" in page)
+    check("and is still readable once escaped", "&amp;" in page)
+
+    thin = _report(assessment={**_report()["assessment"], "answers": 2})
+    check("a thin interview is warned about, in the document",
+          "small sample" in document.build_html(thin))
+
+    unmarked = _report(marked=False, assessment=None,
+                       note="Not totalled yet.")
+    page = document.build_html(unmarked)
+    check("an unmarked interview still produces a document",
+          "was not marked" in page and "Not totalled yet." in page)
+
+    check("the filename is safe to write to disk",
+          document.filename(_report(candidate_profile={"full_name": "A/B: C"}))
+          == "AB-C-assessment.pdf",
+          document.filename(_report(candidate_profile={"full_name": "A/B: C"})))
+
+    # WeasyPrint needs system libraries. Where they are missing this is skipped
+    # rather than failed — the endpoint returns a 503 saying so, and the suite
+    # must still be runnable on a bare machine.
+    try:
+        pdf = document.build_pdf(_report())
+    except (ImportError, OSError) as exc:
+        print(f"  \033[33mSKIP\033[0m  PDF rendering unavailable here ({exc})")
+        return
+    check("it renders to a real PDF", pdf[:5] == b"%PDF-", str(pdf[:8]))
+    check("with content in it", len(pdf) > 4000, str(len(pdf)))
+
+
 def main() -> int:
-    print("\n\033[1mINTEGRITY & VERIFICATION SUITE\033[0m  ·  no keys, no network")
+    print("\n\033[1mINTEGRITY, VERIFICATION & REPORT SUITE\033[0m  ·  no keys, no network")
     print("─" * 70)
 
     test_recording()
@@ -298,6 +397,7 @@ def main() -> int:
     test_ownership_code()
     test_resume_cross_check()
     test_linkedin_claims_nothing()
+    test_report_document()
 
     print("\n" + "─" * 70)
     if FAILED:
