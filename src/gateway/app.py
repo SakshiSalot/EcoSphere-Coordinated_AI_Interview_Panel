@@ -27,6 +27,7 @@ from fastapi.responses import (
 from src import config
 from src.contract import next_utterance
 from src.gateway import auth, users
+from src.intake import plan as intake_plan
 from src.gateway.sse import sse, sse_silent
 from src.state import db
 
@@ -146,6 +147,33 @@ def _caller(
         log.warning("403 %s: %s not permitted here", session_id, caller.role)
         raise HTTPException(status_code=403, detail="forbidden")
     return caller
+
+
+def _hydrate(session_id: str) -> int:
+    """Put a curated interview's plan back into memory. Returns questions restored.
+
+    Called before the panel joins. Interviews under a job opening are written
+    once by the operator and taken by the candidate whenever suits them —
+    possibly days later, certainly after a redeploy — and `SessionState` is
+    process memory. Without this the candidate got a blank session and a
+    generic interview, with no error anywhere to say so.
+
+    Guarded on the session being EMPTY. A live interview must never be
+    overwritten by its own opening snapshot mid-conversation: that would erase
+    the transcript and re-ask every question as though nothing had happened.
+    """
+    from src.intake import plan as intake_plan
+    from src.state.session import get_session
+
+    session = get_session(session_id)
+    if session.plan or len(session.turns):
+        return 0
+
+    restored = intake_plan.restore(session, db.load_plan(session_id))
+    if restored:
+        log.info("session %s: restored %d planned questions from the database",
+                 session_id, restored)
+    return restored
 
 
 def _not_finished(session_id: str) -> None:
@@ -435,6 +463,12 @@ async def add_candidate(job_id: str, request: Request,
         per_role=int(body.get("per_role", 3)),
         roles=roles or None,
     )
+
+    # Written down immediately. Everything above was decided BEFORE the
+    # interview and is meant to be used later, possibly after a redeploy —
+    # keeping it only in process memory is what silently turned curated
+    # interviews back into generic ones.
+    db.save_plan(session_id, intake_plan.snapshot(session))
 
     coding = None
     if job_row["coding_enabled"]:
@@ -775,6 +809,13 @@ async def setup(
         per_role=int(body.get("per_role", 4)),
         roles=body.get("roles") or None,
     )
+
+    # Written down immediately. Everything above was decided BEFORE the
+    # interview and is meant to be used later, possibly after a redeploy —
+    # keeping it only in process memory is what silently turned curated
+    # interviews back into generic ones.
+    db.save_plan(session_id, intake_plan.snapshot(session))
+
     # Two tokens, because the candidate is the person being assessed. One
     # shared token would let them read /state mid-interview, see "turn 6:
     # 2.0/10, flagged vague", and simply answer again — the assessment would
@@ -938,6 +979,12 @@ async def prepare(
                         if caller.user_id else ""),
     )
 
+    # Written down immediately. Everything above was decided BEFORE the
+    # interview and is meant to be used later, possibly after a redeploy —
+    # keeping it only in process memory is what silently turned curated
+    # interviews back into generic ones.
+    db.save_plan(session_id, intake_plan.snapshot(session))
+
     if job_title.strip():
         db.write("UPDATE interviews SET job_title = ? WHERE session_id = ?",
                  (job_title.strip(), session_id))
@@ -1011,6 +1058,10 @@ async def start_panel(
     # drain the free 300 from anywhere on the internet.
     _caller(authorization, session_id, (auth.OPERATOR, auth.CANDIDATE))
     _not_finished(session_id)
+
+    # Before anything joins. A curated interview may have been written days
+    # ago, by a process that no longer exists.
+    _hydrate(session_id)
 
     from src.agora import session as panel
     from src.agora.tokens import build_token

@@ -1,3 +1,20 @@
+---
+title: EchoSphere Interview Panel
+emoji: 🎙️
+colorFrom: indigo
+colorTo: red
+sdk: docker
+app_port: 7860
+pinned: false
+short_description: Coordinated AI interview panel — Team Lumina, PS11
+---
+
+<!-- The block above is for Hugging Face Spaces, which reads its configuration
+     from README front-matter and ignores the rest. Without `sdk: docker` the
+     Space never builds the Dockerfile, and without `app_port: 7860` it looks
+     for the app on the wrong port and shows a permanent "starting" spinner.
+     GitHub renders it as a small table and is otherwise unbothered. -->
+
 # EchoSphere — Coordinated AI Interview Panel
 
 **Team Lumina · EchoSphere Hackathon 2026 · Problem Statement 11**
@@ -95,11 +112,11 @@ python3.11 -m venv .venv
 make check
 ```
 
-**273 regression tests. No API keys, no network, no cost.** Three suites: 122
+**283 regression tests. No API keys, no network, no cost.** Three suites: 122
 for the conductor (floor control, the Priya→Arjun handoff, contradiction
 detection, role-play scenarios, the difficulty ladder in both directions, the
 interview ending), 84 for the marking engine (rubric shape, quote verification,
-allocation arithmetic), and 67 for monitoring, profile verification and the
+allocation arithmetic), and 77 for monitoring, profile verification and the
 written report. If this is green, the whole brain on your machine is intact.
 
 They pass with **no `.env` at all** — that is checked, in a container with no

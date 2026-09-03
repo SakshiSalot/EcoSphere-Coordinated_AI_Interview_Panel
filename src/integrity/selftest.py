@@ -383,6 +383,64 @@ def test_report_document() -> None:
     check("with content in it", len(pdf) > 4000, str(len(pdf)))
 
 
+def test_plan_survives_restart() -> None:
+    """A curated interview is taken LATER. Later is after a restart.
+
+    The whole point of writing five interviews on Monday is that five people
+    sit them whenever suits them. The plan lived only in process memory, and
+    `get_session()` on an unknown id returns a BLANK session rather than an
+    error — so a redeploy between curating and joining silently swapped a
+    personalised interview for a generic one, with nothing anywhere saying so.
+    """
+    print("\n\033[1ma curated interview survives the gateway restarting\033[0m")
+    import src.state.session as sessions
+    from src.gateway.app import _hydrate
+    from src.intake import plan as intake_plan
+    from src.state.models import CandidateProfile, JobSpec, PlannedQuestion
+
+    session = sessions.reset_session("iv-restart")
+    session.roles = ["technical", "product"]
+    session.job = JobSpec(title="Backend Engineer", description="payments",
+                          must_haves=["idempotency"])
+    session.candidate = CandidateProfile(name="Harsh",
+                                         resume_text="Built a retry layer in Redis",
+                                         highlights=["retry layer"])
+    session.plan = [
+        PlannedQuestion(role="technical", topic="retries",
+                        text="Walk me through the retry layer.", difficulty="hard"),
+        PlannedQuestion(role="product", topic="impact",
+                        text="Who felt the difference?", difficulty="medium"),
+    ]
+    db.save_plan("iv-restart", intake_plan.snapshot(session))
+
+    sessions._SESSIONS.clear()          # the gateway restarts
+    restored = _hydrate("iv-restart")
+    back = sessions.get_session("iv-restart")
+
+    check("the questions come back", restored == 2 and len(back.plan) == 2,
+          str(restored))
+    check("with their wording intact",
+          back.plan[0].text == "Walk me through the retry layer.", back.plan[0].text)
+    check("and their difficulty", back.plan[0].difficulty == "hard")
+    check("the CV comes back", "Redis" in back.candidate.resume_text)
+    check("the advert comes back", back.job.title == "Backend Engineer")
+    check("the panel comes back", back.roles == ["technical", "product"])
+    check("and the floor starts on the first of them",
+          back.floor_holder == "technical", back.floor_holder)
+    # A snapshot is taken before anybody answers, so every question in it is
+    # unasked. Carrying a stale flag would skip questions nobody heard.
+    check("nothing is marked as already asked",
+          not any(q.asked for q in back.plan))
+
+    back.turns.add("candidate", "I built it with Redis and idempotency keys.")
+    turns_before = len(back.turns)
+    check("hydrating a LIVE interview is a no-op",
+          _hydrate("iv-restart") == 0 and len(back.turns) == turns_before)
+
+    check("an interview with no saved plan hydrates to nothing, not an error",
+          _hydrate("iv-never-existed") == 0)
+
+
 def main() -> int:
     print("\n\033[1mINTEGRITY, VERIFICATION & REPORT SUITE\033[0m  ·  no keys, no network")
     print("─" * 70)
@@ -398,6 +456,7 @@ def main() -> int:
     test_resume_cross_check()
     test_linkedin_claims_nothing()
     test_report_document()
+    test_plan_survives_restart()
 
     print("\n" + "─" * 70)
     if FAILED:

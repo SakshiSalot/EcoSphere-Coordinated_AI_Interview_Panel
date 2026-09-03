@@ -207,3 +207,86 @@ def setup_session(
             for q in questions
         ],
     }
+
+
+# --- surviving a restart -------------------------------------------------
+#
+# WHY THIS EXISTS. An interview curated under a job opening is deliberately
+# taken LATER — that is the whole feature: the operator writes five interviews
+# on Monday and the candidates sit them whenever suits them. But the plan, the
+# advert and the CV lived only in `SessionState`, which is process memory, and
+# `get_session()` on an id it has never seen returns a BLANK session rather
+# than an error.
+#
+# So a gateway restart between curation and the candidate joining — a redeploy,
+# a crash, a Space going idle — silently replaced a personalised interview with
+# a generic one. No error, no warning, and two Gemini calls per candidate
+# thrown away. Silent degradation is the worst kind: the demo still runs, and
+# only someone reading the transcript afterwards notices the questions had
+# nothing to do with anybody's CV.
+#
+# Persisted as JSON rather than rebuilt on demand. Regenerating would take
+# several seconds of model time with the candidate watching a spinner, would
+# produce DIFFERENT questions from the ones the operator reviewed, and would
+# fail outright if the quota were spent.
+
+
+def snapshot(session) -> dict:
+    """Everything about an interview that was decided before it started."""
+    return {
+        "roles": list(session.roles),
+        "job": {
+            "title": session.job.title,
+            "description": session.job.description,
+            "must_haves": list(session.job.must_haves or []),
+        },
+        "candidate": {
+            "name": session.candidate.name,
+            "resume_text": session.candidate.resume_text,
+            "highlights": list(session.candidate.highlights or []),
+        },
+        "plan": [
+            {"role": q.role, "text": q.text, "difficulty": q.difficulty,
+             "topic": q.topic}
+            for q in session.plan
+        ],
+    }
+
+
+def restore(session, saved: dict) -> int:
+    """Put a snapshot back into a fresh session. Returns questions restored.
+
+    `asked_turn_id` is deliberately NOT restored. A snapshot is taken once, at
+    setup, before anybody has answered anything — so every question in it is
+    unasked by construction. Carrying a stale asked-flag across a restart would
+    silently skip questions the candidate never heard.
+    """
+    if not saved:
+        return 0
+
+    job = saved.get("job") or {}
+    candidate = saved.get("candidate") or {}
+
+    session.roles = list(saved.get("roles") or [])
+    if session.roles:
+        session.floor_holder = session.roles[0]
+
+    session.job = JobSpec(
+        title=job.get("title", ""),
+        description=job.get("description", ""),
+        must_haves=list(job.get("must_haves") or []),
+    )
+    session.candidate = CandidateProfile(
+        name=candidate.get("name", ""),
+        resume_text=candidate.get("resume_text", ""),
+        highlights=list(candidate.get("highlights") or []),
+    )
+    session.plan = [
+        PlannedQuestion(
+            role=q.get("role", ""), text=q.get("text", ""),
+            difficulty=q.get("difficulty", "medium"), topic=q.get("topic", ""),
+        )
+        for q in (saved.get("plan") or [])
+        if q.get("text")
+    ]
+    return len(session.plan)

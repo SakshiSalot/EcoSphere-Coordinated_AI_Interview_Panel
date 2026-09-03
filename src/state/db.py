@@ -122,6 +122,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # keeps adding integrity events after that. Separate columns also make
         # the point structural: nothing in here can move a mark.
         "integrity_json": "TEXT",
+
+        # The question plan, the advert and the CV, as decided at setup.
+        #
+        # These lived only in `SessionState`, which is process memory — and a
+        # curated interview is deliberately taken LATER, which is exactly when
+        # the process has restarted. Without this, a redeploy between curating
+        # an interview and the candidate joining silently replaced their
+        # personalised questions with the generic bank.
+        "plan_json": "TEXT",
     }
     for column, ddl in added.items():
         if column not in have:
@@ -439,6 +448,35 @@ def set_round_score(session_id: str, which: str, score: float) -> None:
     column = {"voice": "voice_score", "coding": "coding_score"}[which]
     write(f"UPDATE interviews SET {column} = ? WHERE session_id = ?",
           (float(score), session_id))
+
+
+def save_plan(session_id: str, payload: dict) -> None:
+    """Write down everything decided before the interview started.
+
+    Upserts a row if there is not one yet: `/session/{id}/prepare` can run on a
+    session the database has never seen, and losing the plan because no row
+    existed would be the same bug in a different place.
+    """
+    if one("SELECT 1 FROM interviews WHERE session_id = ?", (session_id,)) is None:
+        write(
+            "INSERT INTO interviews (session_id, status, created_at) "
+            "VALUES (?, 'ready', ?)",
+            (session_id, time.time()),
+        )
+    write("UPDATE interviews SET plan_json = ? WHERE session_id = ?",
+          (json.dumps(payload), session_id))
+
+
+def load_plan(session_id: str) -> dict:
+    row = one("SELECT plan_json FROM interviews WHERE session_id = ?",
+              (session_id,))
+    if not row or not row["plan_json"]:
+        return {}
+    try:
+        return json.loads(row["plan_json"])
+    except json.JSONDecodeError:
+        log.warning("plan for %s did not parse", session_id)
+        return {}
 
 
 def save_coding(session_id: str, payload: dict) -> None:
