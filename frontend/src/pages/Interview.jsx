@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
+import { createMonitor } from "../integrity";
 
 /* The live interview.
  *
@@ -18,6 +19,61 @@ import { api } from "../api";
 
 const POLL_MS = 2000;
 
+/* What the candidate is told about monitoring, in the words they would use.
+ *
+ * Shown to them live, and not because we have to. Someone who can see exactly
+ * what is registering has no reason to imagine worse, and an indicator saying
+ * "you are out of frame" lets them fix a tilted laptop lid instead of
+ * unknowingly collecting six flags for it. */
+const FACE_STATE = {
+  ok:          { dot: "good", text: "You are in frame" },
+  away:        { dot: "warn", text: "Looking away — this is normal while thinking" },
+  none:        { dot: "warn", text: "Nobody in frame — check your camera angle" },
+  many:        { dot: "warn", text: "More than one person in frame" },
+  unavailable: { dot: "off",  text: "Face detection unavailable — focus is still monitored" },
+  unknown:     { dot: "off",  text: "Starting up…" },
+};
+
+const CAMERA_STATE = {
+  denied:      "Camera declined. The interview continues, and the report will say monitoring was off.",
+  unavailable: "No camera available. The interview continues without it.",
+  starting:    "Asking for camera permission…",
+};
+
+function MonitorPanel({ videoRef, status, live }) {
+  const face = FACE_STATE[status?.face] || FACE_STATE.unknown;
+  const cameraNote = CAMERA_STATE[status?.camera];
+
+  return (
+    <div className="card monitor">
+      <div className="monitor-video">
+        {/* muted and playsInline so it never competes with the interview
+          * audio and never goes fullscreen on a phone. */}
+        <video ref={videoRef} muted playsInline autoPlay />
+        {status?.camera !== "on" && <span className="monitor-idle">Camera off</span>}
+      </div>
+
+      <div className="monitor-body">
+        <div className="monitor-head">
+          <span className={`dot ${live ? face.dot : "off"}`} />
+          <b>{live ? face.text : "Monitoring starts when you join"}</b>
+        </div>
+
+        {cameraNote && <p className="small muted">{cameraNote}</p>}
+        {status?.note && <p className="small muted">{status.note}</p>}
+
+        <p className="small muted monitor-privacy">
+          <b>No video is sent anywhere.</b> The camera image is read on this
+          computer and never uploaded, recorded or stored. What reaches the
+          hiring team is a list of moments — “looked away”, “left the tab” —
+          with how long each lasted, next to the transcript. It carries no
+          marks and cannot change your score.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function Interview() {
   const { sessionId } = useParams();
   const navigate = useNavigate();
@@ -29,12 +85,20 @@ export default function Interview() {
   const [muted, setMuted] = useState(false);
   const [error, setError] = useState("");
 
+  // Monitoring. Opt-out rather than opt-in: the candidate is told plainly what
+  // is watched and what leaves their machine (nothing but event names), and
+  // declining is recorded as declined rather than silently treated as clean.
+  const [watch, setWatch] = useState(true);
+  const [integrity, setIntegrity] = useState(null);
+
   // Refs, not state: these are not rendered, and putting an SDK client in
   // state re-runs effects on every reconnect.
   const client = useRef(null);
   const mic = useRef(null);
   const timer = useRef(null);
   const bottom = useRef(null);
+  const camera = useRef(null);
+  const monitor = useRef(null);
 
   const nameOf = useCallback(
     (role) => panel.find((p) => p.role === role)?.name || role,
@@ -43,6 +107,11 @@ export default function Interview() {
 
   const teardown = useCallback(async (endedByPanel) => {
     clearInterval(timer.current);
+    // Monitoring stops FIRST, and awaited: stopping flushes the last batch and
+    // closes out anything still held — an interview that ends while the
+    // candidate is out of frame should record that, not lose it.
+    try { await monitor.current?.stop(); } catch { /* nothing running */ }
+    monitor.current = null;
     try { mic.current?.close(); } catch { /* already closed */ }
     try { await client.current?.leave(); } catch { /* already gone */ }
     mic.current = null;
@@ -107,6 +176,15 @@ export default function Interview() {
       const started = await api.startPanel(sessionId, creds.channel);
       setPanel(started.panel || []);
 
+      // 5. Monitoring, last and deliberately non-blocking. It is advisory, and
+      // an interview must never fail to start because a camera or a CDN did.
+      monitor.current = createMonitor({
+        sessionId,
+        stage: "voice",
+        onStatus: setIntegrity,
+      });
+      monitor.current.start(watch ? camera.current : null).catch(() => {});
+
       setPhase("live");
       await refresh();
       timer.current = setInterval(refresh, POLL_MS);
@@ -145,6 +223,10 @@ export default function Interview() {
   useEffect(() => {
     const bail = () => {
       if (!client.current) return;
+      // Whatever monitoring has queued goes with it — a closed tab is exactly
+      // the moment the last few events matter, and losing them would make
+      // "closed the tab and vanished" indistinguishable from a clean finish.
+      try { monitor.current?.flushNow(); } catch { /* nothing running */ }
       const held = sessionStorage.getItem("echosphere.token");
       fetch(`/session/${encodeURIComponent(sessionId)}/stop`, {
         method: "POST",
@@ -185,6 +267,33 @@ export default function Interview() {
         </div>
 
         {error && <div className="notice error">{error}</div>}
+
+        {phase === "ready" && (
+          <label className="consent">
+            <input
+              type="checkbox"
+              checked={watch}
+              onChange={(e) => setWatch(e.target.checked)}
+            />
+            <span>
+              <b>Use my camera during the interview.</b>
+              <span className="small muted">
+                The image stays on this computer — it is never uploaded or
+                recorded. Only the fact that you were in frame is reported, and
+                it carries no marks. You can decline; the interview runs the
+                same, and the report will simply say monitoring was off.
+              </span>
+            </span>
+          </label>
+        )}
+
+        {(watch || phase === "live") && (
+          <MonitorPanel
+            videoRef={camera}
+            status={integrity}
+            live={phase === "live"}
+          />
+        )}
 
         {phase === "ended" && (
           <div className="notice info">

@@ -326,6 +326,160 @@ async def me(authorization: str = Header(default="")):
 # --- what each person can see ------------------------------------------
 
 
+# --- openings, and the candidates under them ----------------------------
+
+
+@app.post("/jobs")
+async def create_job(request: Request, authorization: str = Header(default="")):
+    """Create an opening. Operator only."""
+    caller = _signed_in(authorization)
+    if caller.role != users.OPERATOR:
+        raise HTTPException(403, "only an operator can create an opening")
+
+    body = await request.json()
+    title = (body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(400, "an opening needs a title")
+
+    job_id = db.create_job(
+        title=title,
+        description=(body.get("description") or "").strip(),
+        operator_id=caller.user_id,
+        coding_enabled=bool(body.get("coding_enabled", True)),
+        voice_weight=float(body.get("voice_weight", 0.7)),
+    )
+    log.info("job %s created by user %s: %s", job_id, caller.user_id, title)
+    return db.row_to_dict(db.job(job_id))
+
+
+@app.get("/jobs")
+async def list_jobs(authorization: str = Header(default="")):
+    caller = _signed_in(authorization)
+    if caller.role != users.OPERATOR:
+        raise HTTPException(403, "forbidden")
+    return {"jobs": [db.row_to_dict(r) for r in db.jobs_for_operator(caller.user_id)]}
+
+
+def _own_job(caller: Principal, job_id: str):
+    row = db.job(job_id)
+    if row is None:
+        raise HTTPException(404, f"no opening {job_id!r}")
+    if row["operator_id"] != caller.user_id:
+        raise HTTPException(403, "forbidden")
+    return row
+
+
+@app.get("/jobs/{job_id}")
+async def job_detail(job_id: str, authorization: str = Header(default="")):
+    """The opening and its leaderboard."""
+    from src.analysis import leaderboard
+
+    caller = _signed_in(authorization)
+    if caller.role != users.OPERATOR:
+        raise HTTPException(403, "forbidden")
+    row = _own_job(caller, job_id)
+    board = leaderboard.build(row, db.interviews_for_job(job_id))
+    board["description"] = row["description"]
+    return board
+
+
+@app.post("/jobs/{job_id}/candidates")
+async def add_candidate(job_id: str, request: Request,
+                        authorization: str = Header(default="")):
+    """Curate one interview for one applicant, and hand back their code.
+
+    Everything expensive happens HERE: the spoken question plan and the coding
+    problem are both written from this candidate's CV against this advert,
+    while the operator is at their desk. The candidate opens a ready interview
+    rather than watching a model think.
+    """
+    from src.coding import round as coding_round
+    from src.intake.plan import setup_session
+    from src.state.session import reset_session
+
+    caller = _signed_in(authorization)
+    if caller.role != users.OPERATOR:
+        raise HTTPException(403, "forbidden")
+    job_row = _own_job(caller, job_id)
+
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    resume = (body.get("resume_text") or "").strip()
+    if not name:
+        raise HTTPException(400, "the candidate needs a name")
+    if len(resume) < 40:
+        raise HTTPException(
+            400, "paste the candidate's CV — the interview is built from it"
+        )
+
+    session_id, code = db.create_invited_interview(
+        job_id=job_id, operator_id=caller.user_id, candidate_name=name,
+        resume_text=resume, job_title=job_row["title"],
+    )
+
+    roles = [r.strip() for r in (body.get("roles") or []) if r.strip()]
+    session = reset_session(session_id)
+    if roles:
+        session.roles = roles
+        session.floor_holder = roles[0]
+
+    plan = setup_session(
+        session,
+        job_title=job_row["title"],
+        job_description=job_row["description"],
+        resume_text=resume,
+        candidate_name=name,
+        per_role=int(body.get("per_role", 3)),
+        roles=roles or None,
+    )
+
+    coding = None
+    if job_row["coding_enabled"]:
+        try:
+            q = coding_round.prepare(session_id, job_row, resume,
+                                     language=body.get("language", "python"))
+            coding = {"title": q["title"], "grounded_in": q["grounded_in"]}
+        except Exception as exc:
+            # A missing coding question must not cost the operator the
+            # interview they just curated. Say so; the round can be added later.
+            log.error("coding question failed for %s: %s", session_id, exc)
+
+    log.info("job %s: invited %s as %s (code %s)", job_id, name, session_id, code)
+    return {
+        "session_id": session_id,
+        "invite_code": code,
+        "candidate": name,
+        "planned": plan.get("planned", 0),
+        "personalised": plan.get("personalised", False),
+        "coding": coding,
+    }
+
+
+@app.post("/interviews/claim")
+async def claim(request: Request, authorization: str = Header(default="")):
+    """A candidate entering the code they were sent."""
+    caller = _signed_in(authorization)
+    if caller.role != users.CANDIDATE:
+        raise HTTPException(403, "sign in as a candidate to use an interview code")
+
+    body = await request.json()
+    code = (body.get("code") or "").strip().upper()
+    row = db.by_invite_code(code) if code else None
+    if row is None:
+        raise HTTPException(404, "that code does not match an interview")
+
+    if row["candidate_id"] not in (None, caller.user_id):
+        # Somebody already has it. Say no without saying whose.
+        raise HTTPException(409, "that code has already been used")
+
+    if row["candidate_id"] is None:
+        db.claim_interview(row["session_id"], caller.user_id)
+        log.info("interview %s claimed by user %s", row["session_id"], caller.user_id)
+
+    return {"session_id": row["session_id"], "job_title": row["job_title"],
+            "stage": row["stage"]}
+
+
 @app.get("/interviews")
 async def my_interviews(authorization: str = Header(default="")):
     """The list behind both home screens.
@@ -422,6 +576,8 @@ async def assessment(session_id: str, authorization: str = Header(default="")):
     transcript = db.load_transcript(session_id)
     marked = bool(row["assessment_json"])
 
+    from src.integrity import monitor
+
     return {
         "session_id": session_id,
         "job_title": row["job_title"],
@@ -430,6 +586,13 @@ async def assessment(session_id: str, authorization: str = Header(default="")):
         "transcript": transcript,
         "marked": marked,
         "assessment": _json.loads(row["assessment_json"]) if marked else None,
+        # Read alongside the marks, and stored apart from them. The separation
+        # is the point: integrity events are evidence for a person to weigh,
+        # never an input to a score, and joining them here at read time rather
+        # than folding them into the assessment keeps that true in the schema
+        # and not merely in a comment.
+        "integrity": monitor.summary(session_id),
+        "candidate_profile": db.profile_for(row["candidate_id"]),
         "note": None if marked else (
             "Not totalled yet — use Finish to mark this interview."
             if transcript else
@@ -569,6 +732,13 @@ async def setup(
         job_title=body.get("job_title", ""),
     )
     result["candidate"] = users.public(candidate)
+
+    # Setting an interview up again on the same id is a rerun, and a rerun must
+    # not inherit the previous attempt's integrity log — the operator would be
+    # reading a flag raised during a session that no longer exists.
+    from src.integrity import monitor
+
+    monitor.clear(session_id)
 
     result.update(auth.tokens_for(session_id, session.token_epoch))
     result["roles"] = session.roles or None
@@ -771,6 +941,27 @@ async def start_panel(
     if panel.active(session_id):
         raise HTTPException(409, "this interview already has agents in the call")
 
+    # Work out our own public address if nobody configured one.
+    #
+    # Agora calls the URL we hand it when the agent joins, so it has to be
+    # reachable from the internet — not localhost. On a deployment the request
+    # already tells us what that address is, which removes the single most
+    # error-prone line of configuration in the project.
+    if not config.GATEWAY_PUBLIC_URL:
+        base = str(request.base_url).rstrip("/")
+        forwarded = request.headers.get("x-forwarded-proto")
+        if forwarded:
+            base = base.replace("http://", f"{forwarded}://", 1)
+        if base.startswith("https://"):
+            config.GATEWAY_PUBLIC_URL = base
+            log.info("GATEWAY_PUBLIC_URL not set — using %s from this request", base)
+        else:
+            raise HTTPException(
+                500,
+                "GATEWAY_PUBLIC_URL is not set and this request did not arrive "
+                "over HTTPS, so Agora would have no address to call back on.",
+            )
+
     roles = session.roles or None
     try:
         agents = await panel.start(
@@ -858,6 +1049,16 @@ async def stop_panel(session_id: str, authorization: str = Header(default="")):
     if completed:
         db.set_status(session_id, "ended")
         result = _total_interview(session_id)
+
+        # The conversation is one round of two. Record its score on its own and
+        # move the stage on, so a candidate can come back for the coding
+        # exercise without the interview looking unfinished to nobody.
+        if result:
+            db.set_round_score(session_id, "voice", result.get("fraction", 0.0))
+        row = db.interview(session_id)
+        stage = row["stage"] if row else "invited"
+        db.set_stage(session_id,
+                     "complete" if stage in ("coding_done", "complete") else "voice_done")
 
     log.info(
         "session %s: %d turns saved, %s",
@@ -1045,6 +1246,214 @@ async def finish(session_id: str, authorization: str = Header(default="")):
         session_id, result["earned"], result["total"],
         result["answers"], len(result["evidence"]), session.token_epoch,
     )
+    return result
+
+
+# --- the coding round ----------------------------------------------------
+# Taken separately from the conversation, possibly days later, so all of its
+# state is in the database rather than in memory.
+
+
+@app.get("/session/{session_id}/coding")
+async def coding_state(session_id: str, authorization: str = Header(default="")):
+    from src.coding import round as coding_round
+
+    caller = _caller(authorization, session_id, (auth.OPERATOR, auth.CANDIDATE))
+    return coding_round.state(
+        session_id, for_candidate=caller.role == auth.CANDIDATE
+    )
+
+
+@app.post("/session/{session_id}/coding/save")
+async def coding_save(session_id: str, request: Request,
+                      authorization: str = Header(default="")):
+    """Keep what has been typed. Called as they work, so a closed tab or a
+    dropped connection costs nothing."""
+    from src.coding import round as coding_round
+
+    _caller(authorization, session_id, (auth.OPERATOR, auth.CANDIDATE))
+    body = await request.json()
+    coding_round.save_source(session_id, body.get("source", ""))
+    return {"saved": True}
+
+
+@app.post("/session/{session_id}/coding/run")
+async def coding_run(session_id: str, request: Request,
+                     authorization: str = Header(default="")):
+    """Run the code once, on the sandbox, against one input."""
+    from src.coding import round as coding_round
+    from src.coding.sandbox import SandboxError
+
+    _caller(authorization, session_id, (auth.OPERATOR, auth.CANDIDATE))
+    body = await request.json()
+    try:
+        return coding_round.run(session_id, body.get("source", ""),
+                                body.get("stdin", ""))
+    except SandboxError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/session/{session_id}/coding/submit")
+async def coding_submit(session_id: str, request: Request,
+                        authorization: str = Header(default="")):
+    """Run every test and close the round."""
+    from src.coding import round as coding_round
+    from src.coding.sandbox import SandboxError
+
+    _caller(authorization, session_id, (auth.OPERATOR, auth.CANDIDATE))
+    body = await request.json()
+    try:
+        result = coding_round.submit(session_id, body.get("source", ""))
+    except SandboxError as exc:
+        raise HTTPException(400, str(exc))
+
+    row = db.interview(session_id)
+    stage = row["stage"] if row else "invited"
+    db.set_stage(session_id,
+                 "complete" if stage in ("voice_done", "complete") else "coding_done")
+    return result
+
+
+# --- integrity monitoring -------------------------------------------------
+# The browser watches; this only writes down what it says. No video is ever
+# received here — see src/integrity/monitor.py for why that is structural
+# rather than a promise.
+
+
+@app.post("/session/{session_id}/integrity")
+async def integrity_report(session_id: str, request: Request,
+                           authorization: str = Header(default="")):
+    """Accept a batch of focus and camera events from the candidate's browser.
+
+    The CANDIDATE is allowed to post here, which sounds wrong until you notice
+    there is no alternative: the events are raised on their machine, by their
+    browser, about them. What matters is that nothing they send can help them —
+    unknown event kinds are dropped rather than stored, the timestamps are the
+    server's, and none of it touches a mark. The worst a hostile client can do
+    is send nothing, which the heartbeat makes visible.
+    """
+    _caller(authorization, session_id, (auth.OPERATOR, auth.CANDIDATE))
+
+    from src.integrity import monitor
+
+    body = await request.json()
+    events = body.get("events") or []
+    if not isinstance(events, list):
+        raise HTTPException(400, "events must be a list")
+
+    return monitor.record(session_id, events, stage=body.get("stage", "voice"))
+
+
+@app.get("/session/{session_id}/integrity")
+async def integrity_log(session_id: str, authorization: str = Header(default="")):
+    """The integrity log, for the operator reading the assessment.
+
+    Operator only — and not because the candidate must not know they were
+    monitored. They are told before it starts and can see the indicator
+    throughout; what they must not have is a live readout of which behaviours
+    register, which is a tuning guide for anyone who wanted to game it.
+    """
+    _caller(authorization, session_id, (auth.OPERATOR,))
+
+    from src.integrity import monitor
+
+    return monitor.summary(session_id)
+
+
+# --- the candidate's profile links ----------------------------------------
+
+
+@app.get("/profile")
+async def get_profile(authorization: str = Header(default="")):
+    """The signed-in person's own links, and the last GitHub check."""
+    caller = _signed_in(authorization)
+    profile = db.profile_for(caller.user_id)
+
+    from src.verify import github as gh
+
+    # The challenge code depends on the username, so it is computed rather
+    # than stored — and shown only to the account's owner, since anyone who
+    # could read it could publish it and claim the account.
+    username = profile.get("github_username") or ""
+    profile["challenge"] = (
+        gh.challenge_for(caller.user_id, username) if username else ""
+    )
+    return profile
+
+
+@app.post("/profile/links")
+async def set_profile_links(request: Request,
+                            authorization: str = Header(default="")):
+    """Save the GitHub username and LinkedIn URL the candidate claims.
+
+    Saving is claiming. Verification is a separate call, and changing the
+    username throws away the previous account's proof — otherwise verifying
+    an account you own and then repointing the field would keep the tick.
+    """
+    caller = _signed_in(authorization)
+
+    from src.verify import github as gh
+
+    body = await request.json()
+    username = gh.normalise(body.get("github_username", ""))
+    if username and not gh.is_username(username):
+        raise HTTPException(400, "That does not look like a GitHub username.")
+
+    try:
+        linkedin = gh.linkedin(body.get("linkedin_url", ""))
+    except gh.VerifyError as exc:
+        raise HTTPException(400, str(exc))
+
+    db.save_profile_links(caller.user_id, username, linkedin["url"])
+    profile = db.profile_for(caller.user_id)
+    profile["challenge"] = (
+        gh.challenge_for(caller.user_id, username) if username else ""
+    )
+    profile["linkedin"] = linkedin
+    return profile
+
+
+@app.post("/profile/github")
+async def verify_github(request: Request, authorization: str = Header(default="")):
+    """Read the public GitHub account and check the ownership code.
+
+    Runs in a thread: three HTTP calls to api.github.com, and blocking the
+    event loop on someone else's network is how one slow request becomes a
+    stalled gateway for every interview in progress.
+    """
+    import asyncio
+
+    caller = _signed_in(authorization)
+
+    from src.verify import github as gh
+
+    body = await request.json() if await request.body() else {}
+    profile = db.profile_for(caller.user_id)
+    username = gh.normalise(body.get("github_username") or
+                            profile.get("github_username") or "")
+    if not username:
+        raise HTTPException(400, "Add a GitHub username first.")
+
+    # Whatever resume we have for this person, so the cross-check has something
+    # to compare against. Their most recent interview is the best guess.
+    rows = db.interviews_for_candidate(caller.user_id)
+    resume_text = next((r["resume_text"] for r in rows if r["resume_text"]), "")
+
+    try:
+        result = await asyncio.to_thread(
+            gh.verify, username, caller.user_id, resume_text
+        )
+    except gh.VerifyError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:  # noqa: BLE001 — GitHub being down is not a 500 of ours
+        log.error("github verification failed for %r: %s", username, exc)
+        raise HTTPException(502, "Could not reach GitHub. Try again shortly.")
+
+    # Save the username too: a candidate may verify one they typed straight
+    # into this call without ever pressing Save.
+    db.save_profile_links(caller.user_id, username,
+                          profile.get("linkedin_url", ""))
+    db.save_github(caller.user_id, result)
     return result
 
 

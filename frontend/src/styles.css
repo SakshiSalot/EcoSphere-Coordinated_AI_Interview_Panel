@@ -445,3 +445,119 @@ button.item:hover:not(:disabled) { border-color: var(--accent); transform: trans
 .password-field .reveal:focus-visible {
   outline: 2px solid var(--accent-ink); outline-offset: 1px; color: var(--ink);
 }
+
+
+/* --- integrity monitoring, and profile verification ---------------------- */
+
+/* The camera panel the candidate sees during their interview.
+ *
+ * Their own preview is shown deliberately. Someone who can see exactly what
+ * the camera sees has no reason to imagine worse, and a live "you are out of
+ * frame" lets them straighten a laptop lid instead of unknowingly collecting
+ * six flags for it. */
+.monitor { display: grid; gap: 18px; }
+@media (min-width: 620px) { .monitor { grid-template-columns: 200px 1fr; } }
+
+.monitor-video {
+  position: relative; aspect-ratio: 4 / 3; border-radius: 10px;
+  overflow: hidden; background: var(--night); display: grid; place-items: center;
+}
+.monitor-video video {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+  /* Mirrored, because an unmirrored self-view reads as somebody else. */
+  transform: scaleX(-1);
+}
+.monitor-idle {
+  position: absolute; font-size: 13px; color: var(--night-mute);
+  font-family: var(--mono);
+}
+
+.monitor-body { display: flex; flex-direction: column; gap: 8px; }
+.monitor-head { display: flex; align-items: center; gap: 9px; font-size: 15px; }
+.monitor-privacy {
+  border-top: 1px solid var(--line); padding-top: 10px; margin-top: 2px;
+  line-height: 1.55;
+}
+
+/* A status dot on its own, outside the panel-list context. */
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line); flex: none; }
+.dot.good { background: var(--good); }
+.dot.warn { background: var(--warn); }
+.dot.off  { background: var(--line); }
+
+/* Consent, as a real choice rather than a checkbox nobody reads. */
+.consent {
+  display: flex; gap: 12px; align-items: flex-start; cursor: pointer;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 16px 18px;
+}
+.consent input { margin-top: 3px; width: 17px; height: 17px; accent-color: var(--accent); flex: none; }
+.consent > span { display: flex; flex-direction: column; gap: 5px; }
+.consent b { font-size: 15px; }
+
+/* One integrity signal: the count, what it means, and what it cannot
+   distinguish — the caveat is styled as prominently as the number on purpose. */
+.signals { display: flex; flex-direction: column; gap: 14px; }
+.signal {
+  border-left: 2px solid var(--line); padding-left: 14px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.signal .top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.signal .count {
+  font-family: var(--mono); font-size: 12px; color: var(--muted);
+  margin-left: auto;
+}
+.signal .caveat { color: var(--muted); }
+.signal p { line-height: 1.5; }
+
+/* Verified / claimed. Two visibly different things, never one tick. */
+.vbadge {
+  display: inline-block; vertical-align: middle;
+  font-family: var(--body); font-size: 11.5px; font-weight: 700;
+  letter-spacing: .02em; padding: 3px 9px; border-radius: 999px;
+  background: var(--sunk); color: var(--muted);
+}
+.vbadge.verified, .vbadge.ok { background: var(--good-bg); color: var(--good); }
+.vbadge.claimed, .vbadge.warn { background: var(--warn-bg); color: var(--warn); }
+.vbadge.off { background: var(--sunk); color: var(--muted); }
+
+.notice.ok { background: var(--good-bg); border: 1px solid #cfe6d9; color: var(--good); }
+
+.keyvals {
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px 20px;
+  margin: 16px 0 0;
+}
+@media (min-width: 560px) { .keyvals { grid-template-columns: repeat(3, 1fr); } }
+.keyvals dt {
+  font-size: 12px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .06em; margin-bottom: 2px;
+}
+.keyvals dd {
+  margin: 0; font-family: var(--display); font-weight: 700; font-size: 17px;
+  font-variant-numeric: tabular-nums;
+}
+
+.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.chip {
+  font-size: 13px; padding: 4px 10px; border-radius: 999px;
+  background: var(--sunk); color: var(--ink);
+}
+.chip b { color: var(--muted); font-weight: 600; margin-left: 2px; }
+
+.repos { display: flex; flex-direction: column; gap: 10px; }
+.repo {
+  display: flex; flex-direction: column; gap: 3px; text-decoration: none;
+  border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+  color: var(--ink);
+}
+.repo:hover { border-color: var(--accent); }
+.repo .top { display: flex; align-items: baseline; gap: 10px; }
+.repo .meta { font-size: 12.5px; color: var(--muted); margin-left: auto; }
+.repo .desc { font-size: 13.5px; color: var(--muted); line-height: 1.5; }
+
+.challenge {
+  font-family: var(--mono); font-size: 13.5px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px;
+  color: var(--ink); user-select: all;
+}
+.btn-ghost.small { font-size: 13px; padding: 8px 14px; }

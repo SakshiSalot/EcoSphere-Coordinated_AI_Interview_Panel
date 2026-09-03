@@ -21,6 +21,7 @@ which is what stops a dashboard poll blocking on an interview being saved.
 
 import json
 import logging
+import secrets
 import sqlite3
 import threading
 import time
@@ -58,6 +59,25 @@ CREATE TABLE IF NOT EXISTS interviews (
 
 CREATE INDEX IF NOT EXISTS ix_interviews_candidate ON interviews(candidate_id);
 CREATE INDEX IF NOT EXISTS ix_interviews_operator  ON interviews(operator_id);
+
+-- An opening. One job advert, several candidates, one leaderboard.
+--
+-- The advert is written once here rather than pasted into every interview:
+-- candidates for the same opening must be measured against the same
+-- requirements, or their scores are not comparable and the ranking is
+-- meaningless.
+CREATE TABLE IF NOT EXISTS jobs (
+    job_id         TEXT    PRIMARY KEY,
+    title          TEXT    NOT NULL,
+    description    TEXT    NOT NULL DEFAULT '',
+    operator_id    INTEGER REFERENCES users(id),
+    coding_enabled INTEGER NOT NULL DEFAULT 1,
+    voice_weight   REAL    NOT NULL DEFAULT 0.7,
+    closed         INTEGER NOT NULL DEFAULT 0,
+    created_at     REAL    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS ix_jobs_operator ON jobs(operator_id);
 """
 
 _local = threading.local()
@@ -73,9 +93,63 @@ def _migrate(conn: sqlite3.Connection) -> None:
     down.
     """
     have = {row[1] for row in conn.execute("PRAGMA table_info(interviews)")}
-    if "transcript_json" not in have:
-        conn.execute("ALTER TABLE interviews ADD COLUMN transcript_json TEXT")
-        conn.commit()
+
+    # Each column is added on its own so a database halfway through a previous
+    # migration finishes rather than failing on the first one it already has.
+    added = {
+        # The transcript used to live only in memory, so a restart — or a
+        # candidate closing the tab — lost it and the operator opened an empty
+        # record. It is the artefact the whole product exists to produce.
+        "transcript_json": "TEXT",
+
+        # An interview belongs to an opening, and the two rounds are taken
+        # separately: a candidate may do the conversation now and the coding
+        # exercise tomorrow, so each round carries its own score and the stage
+        # says where they are.
+        "job_id":        "TEXT REFERENCES jobs(job_id)",
+        "invite_code":   "TEXT",
+        "candidate_name": "TEXT NOT NULL DEFAULT ''",
+        "resume_text":   "TEXT NOT NULL DEFAULT ''",
+        "stage":         "TEXT NOT NULL DEFAULT 'invited'",
+        "voice_score":   "REAL",
+        "coding_score":  "REAL",
+        "coding_json":   "TEXT",
+
+        # Focus and camera signals raised by the candidate's own browser. Kept
+        # in its own column rather than inside assessment_json because the two
+        # have different lifetimes: the assessment is written once when the
+        # conversation is totalled, and the coding round — taken days later —
+        # keeps adding integrity events after that. Separate columns also make
+        # the point structural: nothing in here can move a mark.
+        "integrity_json": "TEXT",
+    }
+    for column, ddl in added.items():
+        if column not in have:
+            conn.execute(f"ALTER TABLE interviews ADD COLUMN {column} {ddl}")
+
+    # The candidate's own profile links. On the USER and not the interview: a
+    # person's GitHub does not change between two applications, and asking them
+    # to prove ownership once per interview would be a reason not to bother.
+    user_columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
+    for column, ddl in {
+        "github_username":  "TEXT NOT NULL DEFAULT ''",
+        "github_json":      "TEXT",
+        "github_checked_at": "REAL",
+        "linkedin_url":     "TEXT NOT NULL DEFAULT ''",
+    }.items():
+        if column not in user_columns:
+            conn.execute(f"ALTER TABLE users ADD COLUMN {column} {ddl}")
+
+    # Not part of CREATE TABLE: the column arrives by migration on an existing
+    # database, and a UNIQUE constraint cannot be added by ALTER in SQLite.
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_interviews_invite "
+        "ON interviews(invite_code) WHERE invite_code IS NOT NULL"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS ix_interviews_job ON interviews(job_id)"
+    )
+    conn.commit()
 
 
 def connect() -> sqlite3.Connection:
@@ -253,3 +327,202 @@ def interviews_for_candidate(candidate_id: int) -> list[sqlite3.Row]:
 
 def row_to_dict(row: sqlite3.Row | None) -> dict:
     return dict(row) if row is not None else {}
+
+
+# --- jobs, and the candidates under them --------------------------------
+# An opening groups the interviews that must be comparable with each other.
+
+
+def create_job(
+    title: str,
+    description: str,
+    operator_id: int,
+    coding_enabled: bool = True,
+    voice_weight: float = 0.7,
+) -> str:
+    job_id = "job-" + secrets.token_urlsafe(9)
+    write(
+        "INSERT INTO jobs (job_id, title, description, operator_id, "
+        "coding_enabled, voice_weight, created_at) VALUES (?,?,?,?,?,?,?)",
+        (job_id, title.strip(), description.strip(), operator_id,
+         1 if coding_enabled else 0, float(voice_weight), time.time()),
+    )
+    return job_id
+
+
+def job(job_id: str) -> sqlite3.Row | None:
+    return one("SELECT * FROM jobs WHERE job_id = ?", (job_id,))
+
+
+def jobs_for_operator(operator_id: int) -> list[sqlite3.Row]:
+    return query(
+        "SELECT j.*, "
+        "  (SELECT COUNT(*) FROM interviews i WHERE i.job_id = j.job_id) "
+        "     AS candidates, "
+        "  (SELECT COUNT(*) FROM interviews i WHERE i.job_id = j.job_id "
+        "     AND i.stage = 'complete') AS completed "
+        "FROM jobs j WHERE j.operator_id = ? ORDER BY j.created_at DESC",
+        (operator_id,),
+    )
+
+
+def close_job(job_id: str, closed: bool = True) -> None:
+    write("UPDATE jobs SET closed = ? WHERE job_id = ?",
+          (1 if closed else 0, job_id))
+
+
+def delete_job(job_id: str) -> int:
+    """Remove an opening and every interview under it. Returns how many
+    interviews went with it."""
+    conn = connect()
+    n = conn.execute("DELETE FROM interviews WHERE job_id = ?", (job_id,)).rowcount
+    conn.execute("DELETE FROM jobs WHERE job_id = ?", (job_id,))
+    conn.commit()
+    return n
+
+
+def new_invite_code() -> str:
+    """Short enough to read down a phone, long enough not to be guessed.
+
+    Ambiguous characters are left out: a candidate reading a code aloud should
+    never have to ask whether that was a zero or an O.
+    """
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    while True:
+        code = "".join(secrets.choice(alphabet) for _ in range(8))
+        if one("SELECT 1 FROM interviews WHERE invite_code = ?", (code,)) is None:
+            return code
+
+
+def create_invited_interview(
+    job_id: str,
+    operator_id: int,
+    candidate_name: str,
+    resume_text: str,
+    job_title: str,
+) -> tuple[str, str]:
+    """An interview waiting for its candidate. Returns (session_id, code).
+
+    No `candidate_id` yet — the person may not have an account. They claim it
+    with the code, which is what binds the interview to them.
+    """
+    session_id = "iv-" + secrets.token_urlsafe(9)
+    code = new_invite_code()
+    write(
+        "INSERT INTO interviews (session_id, candidate_id, operator_id, "
+        "job_id, invite_code, candidate_name, resume_text, job_title, "
+        "status, stage, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        (session_id, None, operator_id, job_id, code, candidate_name.strip(),
+         resume_text, job_title, "ready", "invited", time.time()),
+    )
+    return session_id, code
+
+
+def by_invite_code(code: str) -> sqlite3.Row | None:
+    return one("SELECT * FROM interviews WHERE invite_code = ?",
+               (code.strip().upper(),))
+
+
+def claim_interview(session_id: str, candidate_id: int) -> None:
+    """Bind an invited interview to the person who entered its code."""
+    write("UPDATE interviews SET candidate_id = ? WHERE session_id = ?",
+          (candidate_id, session_id))
+
+
+def set_stage(session_id: str, stage: str) -> None:
+    write("UPDATE interviews SET stage = ? WHERE session_id = ?",
+          (stage, session_id))
+
+
+def set_round_score(session_id: str, which: str, score: float) -> None:
+    """Record one round's normalised score, 0..1. `which` is voice or coding."""
+    column = {"voice": "voice_score", "coding": "coding_score"}[which]
+    write(f"UPDATE interviews SET {column} = ? WHERE session_id = ?",
+          (float(score), session_id))
+
+
+def save_coding(session_id: str, payload: dict) -> None:
+    write("UPDATE interviews SET coding_json = ? WHERE session_id = ?",
+          (json.dumps(payload), session_id))
+
+
+def load_coding(session_id: str) -> dict:
+    row = one("SELECT coding_json FROM interviews WHERE session_id = ?",
+              (session_id,))
+    if not row or not row["coding_json"]:
+        return {}
+    try:
+        return json.loads(row["coding_json"])
+    except json.JSONDecodeError:
+        return {}
+
+
+# --- the candidate's own profile links ----------------------------------
+# Stored against the person rather than the interview: a GitHub account does
+# not change between two applications, and proving ownership once should count
+# for every interview that person sits.
+
+
+def save_profile_links(user_id: int, github_username: str,
+                       linkedin_url: str) -> None:
+    """Record what the candidate claims. Claiming is not verifying — the
+    verification result is written separately by `save_github`, so a changed
+    username cannot inherit the previous account's proof."""
+    row = one("SELECT github_username FROM users WHERE id = ?", (user_id,))
+    changed = row and (row["github_username"] or "") != github_username
+
+    if changed:
+        # The proof was for the OLD account. Dropping it here is the whole
+        # reason this is not one UPDATE: without it, a candidate could verify
+        # an account they own, then point the field at somebody else's and keep
+        # the tick.
+        write(
+            "UPDATE users SET github_username = ?, linkedin_url = ?, "
+            "github_json = NULL, github_checked_at = NULL WHERE id = ?",
+            (github_username, linkedin_url, user_id),
+        )
+        return
+
+    write("UPDATE users SET github_username = ?, linkedin_url = ? WHERE id = ?",
+          (github_username, linkedin_url, user_id))
+
+
+def save_github(user_id: int, result: dict) -> None:
+    write(
+        "UPDATE users SET github_json = ?, github_checked_at = ? WHERE id = ?",
+        (json.dumps(result), time.time(), user_id),
+    )
+
+
+def profile_for(user_id: int | None) -> dict:
+    """The links and the last verification, as the report renders them."""
+    if user_id is None:
+        return {}
+    row = one(
+        "SELECT full_name, github_username, github_json, github_checked_at, "
+        "linkedin_url FROM users WHERE id = ?", (user_id,)
+    )
+    if row is None:
+        return {}
+
+    github = None
+    if row["github_json"]:
+        try:
+            github = json.loads(row["github_json"])
+        except json.JSONDecodeError:
+            github = None
+
+    return {
+        "full_name": row["full_name"],
+        "github_username": row["github_username"] or "",
+        "github": github,
+        "github_checked_at": row["github_checked_at"],
+        "linkedin_url": row["linkedin_url"] or "",
+    }
+
+
+def interviews_for_job(job_id: str) -> list[sqlite3.Row]:
+    return query(
+        "SELECT * FROM interviews WHERE job_id = ? ORDER BY created_at",
+        (job_id,),
+    )

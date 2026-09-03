@@ -7,6 +7,7 @@ import OperatorHome from "./pages/OperatorHome";
 import Prepare from "./pages/Prepare";
 import Interview from "./pages/Interview";
 import Assessment from "./pages/Assessment";
+import Profile from "./pages/Profile";
 
 /* The bar every page sits under. Dark, so it belongs to the hero on the
  * landing page and reads as a product chrome everywhere else.
@@ -37,6 +38,11 @@ function TopBar() {
               <NavLink to="/" end className={({ isActive }) => (isActive ? "on" : "")}>
                 {user.role === "operator" ? "Interviews" : "Your interviews"}
               </NavLink>
+              {user.role === "candidate" && (
+                <NavLink to="/profile" className={({ isActive }) => (isActive ? "on" : "")}>
+                  Profile
+                </NavLink>
+              )}
               <span className="whoami">
                 <b>{user.full_name || user.username}</b>
                 {user.role}
@@ -95,6 +101,9 @@ export default function App() {
           path="/assessment/:sessionId"
           element={<Protected role="operator"><Assessment /></Protected>}
         />
+        {/* No role: an operator who lands here should see the page rather than
+          * be bounced home, even though the links only appear for candidates. */}
+        <Route path="/profile" element={<Protected><Profile /></Protected>} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>

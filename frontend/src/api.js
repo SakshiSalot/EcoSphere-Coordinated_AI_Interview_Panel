@@ -78,6 +78,15 @@ export const api = {
   decide:     (id, decision) =>
     request("POST", `/interviews/${encodeURIComponent(id)}/decision`, { decision }),
 
+  // The candidate's own profile links. Verification is a separate call from
+  // saving, because saving is only a claim.
+  profile:       () => request("GET", "/profile"),
+  saveLinks:     (fields) => request("POST", "/profile/links", fields),
+  verifyGithub:  (github_username) =>
+    request("POST", "/profile/github", { github_username }),
+
+  integrity: (id) => request("GET", `/session/${encodeURIComponent(id)}/integrity`),
+
   joinCredentials: (id) => request("GET", `/session/${encodeURIComponent(id)}/join`),
   startPanel:      (id, channel) =>
     request("POST", `/session/${encodeURIComponent(id)}/start`, { channel }),

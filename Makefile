@@ -17,7 +17,7 @@ PERSONA?= strong
 help:
 	@echo ""
 	@echo "  FREE — no keys, no network, no minutes"
-	@echo "    make check         99 regression tests, under a minute"
+	@echo "    make check         207 regression tests, under a minute"
 	@echo "    make roles         who can sit on the panel"
 	@echo "    make inputs        what is in inputs/"
 	@echo ""
@@ -53,6 +53,7 @@ help:
 check:
 	@$(PY) -m src.mock.offline
 	@$(PY) -m src.analysis.selftest --offline
+	@$(PY) -m src.integrity.selftest
 
 # The other 35 marking checks, which DO judge with a real model (~2 min).
 score:

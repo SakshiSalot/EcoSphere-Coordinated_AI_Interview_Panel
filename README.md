@@ -95,11 +95,13 @@ python3.11 -m venv .venv
 make check
 ```
 
-**99 regression tests. No API keys, no network, no cost.** Two suites: 35 for
-the conductor (floor control, the Priya→Arjun handoff, the difficulty ladder in
-both directions, repeat handling, the interview ending) and 64 for the marking
-engine (rubric shape, quote verification, allocation arithmetic). If this is
-green, the whole brain on your machine is intact.
+**207 regression tests. No API keys, no network, no cost.** Three suites: 71
+for the conductor (floor control, the Priya→Arjun handoff, the difficulty
+ladder in both directions, repeat handling, the interview ending), 84 for the
+marking engine (rubric shape, quote verification, allocation arithmetic), and
+52 for monitoring and profile verification (event validation, the heartbeat
+gap, resume cross-checking, the ownership code). If this is green, the whole
+brain on your machine is intact.
 
 Once you have model keys, three more that spend no Agora minutes:
 
@@ -254,14 +256,73 @@ src/analysis/          the marking engine
    judge.py              Gemini access for marking — one model, or no score
    pipeline.py           the only file that knows about SessionState
    selftest.py           99 checks; --offline skips the ones that cost
-src/mock/              AI candidate · full-interview harness · 35 offline tests
+src/integrity/         focus and camera signals — advisory, never a mark
+   monitor.py            validates what the browser sends; builds the log
+   selftest.py           52 checks for monitoring and verification
+src/verify/            checking a candidate's public GitHub
+src/coding/            the coding round: generated question, Judge0 sandbox
+src/mock/              AI candidate · full-interview harness · 71 offline tests
 scripts/               panel.py, the interruption gate, TTS probe
+frontend/src/integrity.js   the browser half — the camera never leaves it
 inputs/                job adverts and CVs
 ```
 
 Adding a sixth interviewer is an entry in `src/conductor/personas.yaml` and
 nothing else — role routing, handoff targets and the question planner all read
 that file at runtime.
+
+---
+
+## Monitoring, and what it deliberately does not do
+
+The candidate's browser watches two things: **focus** (the tab going to the
+background, the window losing focus, pasting into the editor) and **the
+camera** — nobody in frame, more than one face, sustained gaze off screen, via
+MediaPipe's face landmarker running on their own machine.
+
+Three design decisions, each of which could have gone the other way:
+
+**No video ever leaves the browser.** Frames go to a `<video>` element and into
+a model on the candidate's own computer. What reaches the server is a list of
+typed events — `no_face, 6.2s`. There is no upload, no recording, no frame
+buffer. A hiring product that ships webcam footage of applicants to a hackathon
+server is a breach waiting to be noticed; this one has nothing to breach.
+
+**Nothing here can fail a candidate.** Integrity events are excluded from
+`scorer.PENALISED_KINDS` and cost exactly zero marks — the offline suite
+asserts it. Every signal has an innocent explanation identical to the guilty
+one: looking away is thinking, a lost focus is a calendar popup, a second face
+is a flatmate. So each signal is stored with a `but` field naming what it
+cannot distinguish, and that text renders **next to the count**, not in a
+footnote. A number alone on a hiring screen is read as an accusation.
+
+**An empty log is reported as empty, not as clean.** Anything running on a
+machine the candidate controls can be switched off by the candidate — that is
+not fixable, and claiming otherwise would be the dishonest part. So the browser
+reports that it is still watching every fifteen seconds, and a stretch with no
+heartbeat is shown as *unmonitored time*, which is missing data rather than a
+clean record.
+
+## GitHub verification, and the two questions people conflate
+
+*Does this account exist and what is in it* is one API call. *Is it theirs* is
+not answerable from the API at all — anyone can type `torvalds` into a form.
+
+So ownership is proven the only way it can be: the candidate publishes a code
+we derive (`echosphere-verify-…`, an HMAC over their account id and the
+username, so it is unguessable and cannot be reused for a second account) in
+their GitHub bio or a public gist. Until they do, the badge says **claimed, not
+proven** — on their screen and the operator's. A tick that means "they typed
+something" is worse than no tick, because someone will trust it.
+
+The resume cross-check reports languages backed by public code and languages
+claimed with none — and ships with the reason the second list is usually
+innocent: most professional code is in a private repository belonging to an
+employer. Ten years of Java at a bank leaves no public Java.
+
+**LinkedIn gets no tick under any circumstances.** There is no public API and
+the terms prohibit scraping, so it is stored as a link for a human to open and
+labelled exactly that.
 
 ---
 

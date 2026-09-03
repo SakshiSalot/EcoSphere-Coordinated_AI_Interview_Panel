@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.git/
+.env
+.env.*
+data/
+docs/
+frontend/node_modules/
+frontend/dist/
+inputs/resume/
+*.log
+.DS_Store
+Hackathon PS/
+*.pdf

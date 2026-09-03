@@ -80,6 +80,18 @@ export default function CandidateHome() {
           </div>
         </div>
 
+        {/* Discovery. The nav has a Profile link, but nobody reads a nav on a
+          * page they came to for one thing — and a candidate with public work
+          * to show is exactly who benefits from finding this. */}
+        <div className="notice">
+          <b>Add your GitHub before you interview.</b>{" "}
+          The hiring team then reads your public work next to your answers,
+          instead of taking the resume's word for it.{" "}
+          <a href="/profile" onClick={(e) => { e.preventDefault(); navigate("/profile"); }}>
+            Add it now
+          </a>
+        </div>
+
         {error && <div className="notice error">{error}</div>}
 
         {interviews === null && !error && (

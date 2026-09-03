@@ -15,6 +15,7 @@ parts than fighting a version mismatch during a hackathon.
 
 import json
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -76,23 +77,42 @@ def structured(
         },
     }
 
+    # A 503 from Gemini says "high demand, try again" — it is explicitly
+    # temporary. Walking the whole model chain and giving up took under two
+    # seconds and failed the interview setup outright, which is a worse
+    # outcome than waiting five. Two passes: once quickly, then once after a
+    # pause, before admitting defeat.
     last: Exception | None = None
-    for model in (models or MODELS):
-        try:
-            r = httpx.post(
-                f"{BASE}/{model}:generateContent",
-                params={"key": config.GEMINI_API_KEY},
-                json=body,
-                timeout=90.0,
-            )
-            if r.status_code >= 400:
-                raise RuntimeError(f"{r.status_code}: {r.text[:200]}")
-            data = r.json()
-            text = data["candidates"][0]["content"]["parts"][0]["text"]
-            log.info("gemini %s answered (%d chars)", model, len(text))
-            return json.loads(text)
-        except Exception as exc:
-            last = exc
-            log.warning("gemini %s failed (%s) — trying next", model, str(exc)[:160])
+    chain = list(models or MODELS)
+
+    for attempt, pause in enumerate((0.0, 4.0, 9.0)):
+        if pause:
+            log.info("every model was busy — waiting %.0fs before retrying", pause)
+            time.sleep(pause)
+        for model in chain:
+            try:
+                r = httpx.post(
+                    f"{BASE}/{model}:generateContent",
+                    params={"key": config.GEMINI_API_KEY},
+                    json=body,
+                    timeout=90.0,
+                )
+                if r.status_code >= 400:
+                    raise RuntimeError(f"{r.status_code}: {r.text[:200]}")
+                data = r.json()
+                text = data["candidates"][0]["content"]["parts"][0]["text"]
+                log.info("gemini %s answered (%d chars)", model, len(text))
+                return json.loads(text)
+            except Exception as exc:
+                last = exc
+                transient = any(
+                    code in str(exc) for code in ("503", "429", "UNAVAILABLE", "timeout")
+                )
+                log.warning("gemini %s failed (%s)%s", model, str(exc)[:140],
+                            "" if transient else " — permanent, skipping it")
+                if not transient:
+                    # A 404 for a retired model will never succeed; drop it so
+                    # the later passes do not waste time on it.
+                    chain = [m for m in chain if m != model] or chain
 
     raise RuntimeError(f"all Gemini models failed; last error: {last}")
