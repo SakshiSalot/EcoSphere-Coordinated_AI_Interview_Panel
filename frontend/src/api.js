@@ -79,6 +79,7 @@ export const api = {
   addCandidate: (id, fields) =>
     request("POST", `/jobs/${encodeURIComponent(id)}/candidates`, fields),
   claim:        (code) => request("POST", "/interviews/claim", { code }),
+  removeJob:    (id) => request("DELETE", `/jobs/${encodeURIComponent(id)}`),
 
   // The coding round. Taken separately from the conversation, so every call
   // is against the database rather than a live session.

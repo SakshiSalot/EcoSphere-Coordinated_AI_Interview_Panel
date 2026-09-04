@@ -46,6 +46,17 @@
 # So a voice is only known-good once a human has HEARD it. Changing one is a
 # live test, not a config edit. If a persona goes silent, this is the first
 # thing to suspect, and `scripts/probe_tts.py` will NOT catch it.
+#
+# VERIFIED BY EAR on this SKU, 4 September 2026 — all four heard in one
+# interview. Do not swap these for untested names before a demo:
+#     English_captivating_female1   Priya
+#     English_Trustworth_Man        Arjun
+#     English_Graceful_Lady         Meera
+#     English_SereneWoman           Kavya
+#
+# KNOWN SILENT — accepted at join, never produce audio:
+#     English_magnetic_male         English_Gentle-voiced_man
+#     Wise_Woman
 # For Hindi, MiniMax voice ids exist per language; swap voice_id only.
 # Nothing in the code reads these values — the whole tts block is passed
 # through to Agora verbatim.

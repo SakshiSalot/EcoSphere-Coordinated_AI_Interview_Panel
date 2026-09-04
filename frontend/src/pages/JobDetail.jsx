@@ -124,7 +124,7 @@ function AddCandidate({ jobId, onAdded }) {
   );
 }
 
-function Row({ row, codingEnabled, onOpen }) {
+function Row({ row, codingEnabled, onOpen, onRemove, removing }) {
   const pct = row.score === null || row.score === undefined
     ? null : Math.round(row.score * 100);
 
@@ -173,6 +173,18 @@ function Row({ row, codingEnabled, onOpen }) {
           <span className={`badge ${row.decision}`}>{DECISION[row.decision]}</span>
         )}
         <Code code={row.invite_code} />
+        {/* A recorded decision is the reason somebody was hired or not. The
+          * server refuses to delete one, so do not offer it here either. */}
+        {!row.decision && (
+          <button
+            className="btn-danger-quiet"
+            title="Delete this interview"
+            onClick={(e) => { e.stopPropagation(); onRemove(row); }}
+            disabled={removing}
+          >
+            {removing ? "…" : "Delete"}
+          </button>
+        )}
       </span>
     </button>
   );
@@ -183,6 +195,46 @@ export default function JobDetail() {
   const navigate = useNavigate();
   const [board, setBoard] = useState(null);
   const [error, setError] = useState("");
+  const [removing, setRemoving] = useState("");
+
+  /* Deleting is destructive and the rows all look alike, so confirm against
+   * the specific candidate rather than trusting a click. */
+  const removeCandidate = async (row) => {
+    if (!window.confirm(
+      `Delete the interview with ${row.candidate}? This cannot be undone.`
+    )) return;
+    setRemoving(row.session_id);
+    setError("");
+    try {
+      await api.removeInterview(row.session_id);
+      setBoard((b) => ({
+        ...b,
+        candidates: b.candidates.filter((c) => c.session_id !== row.session_id),
+      }));
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setRemoving("");
+    }
+  };
+
+  const removeOpening = async () => {
+    const n = board?.candidates?.length ?? 0;
+    if (!window.confirm(
+      n
+        ? `Delete “${board.title}” and all ${n} interview${n === 1 ? "" : "s"} under it? This cannot be undone.`
+        : `Delete “${board.title}”?`
+    )) return;
+    setRemoving("job");
+    setError("");
+    try {
+      await api.removeJob(jobId);
+      navigate("/");
+    } catch (e) {
+      setError(e.message);
+      setRemoving("");
+    }
+  };
 
   const load = useCallback(() => {
     api.job(jobId).then(setBoard).catch((e) => setError(e.message));
@@ -221,10 +273,15 @@ export default function JobDetail() {
                 : "conversation only"}
             </p>
           </div>
-          <button className="btn-ghost" style={{ marginLeft: "auto" }}
-                  onClick={() => navigate("/")}>
-            All openings
-          </button>
+          <div className="row" style={{ marginLeft: "auto" }}>
+            <button className="btn-danger-quiet" onClick={removeOpening}
+                    disabled={!!removing} title="Delete this opening">
+              {removing === "job" ? "…" : "Delete opening"}
+            </button>
+            <button className="btn-ghost" onClick={() => navigate("/")}>
+              All openings
+            </button>
+          </div>
         </div>
 
         <AddCandidate jobId={jobId} onAdded={load} />
@@ -251,6 +308,8 @@ export default function JobDetail() {
               {rows.map((r) => (
                 <Row key={r.session_id} row={r}
                      codingEnabled={board.coding_enabled}
+                     onRemove={removeCandidate}
+                     removing={removing === r.session_id}
                      onOpen={(id) => navigate(`/assessment/${encodeURIComponent(id)}`)} />
               ))}
             </div>

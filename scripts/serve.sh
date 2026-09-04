@@ -48,8 +48,20 @@ TUNNEL_PID=$!
 # its full sixty iterations on every single start: roughly two minutes of
 # silent waiting before anything happened. A 502 is the proof we actually want,
 # because it means DNS resolved and cloudflared is answering.
+# The hostname must contain a HYPHEN. Quick tunnels are always several words
+# joined that way — "cups-treasury-pin-seriously" — and the old pattern also
+# matched `api.trycloudflare.com`, which appears in the log line reporting that
+# the tunnel request FAILED:
+#
+#   failed to request quick Tunnel: Post "https://api.trycloudflare.com/tunnel"
+#
+# So a failed tunnel was read as a successful one, and Cloudflare's own API
+# address was written into .env as the gateway's public URL. Agora would then
+# have been told to call Cloudflare for every turn.
+TUNNEL_RE='https://[a-z0-9]+(-[a-z0-9]+)+\.trycloudflare\.com'
+
 for _ in $(seq 1 45); do
-  URL=$(grep -oE "https://[a-z0-9-]+\.trycloudflare\.com" "$LOG" | head -1 || true)
+  URL=$(grep -oE "$TUNNEL_RE" "$LOG" | head -1 || true)
   if [ -n "${URL:-}" ] && curl -sS -o /dev/null --max-time 5 "$URL/" 2>/dev/null; then
     break
   fi

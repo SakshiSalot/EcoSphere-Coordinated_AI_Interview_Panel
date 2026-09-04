@@ -463,6 +463,90 @@ def test_agents_disagree_about_the_words() -> None:
           answers and answers[0].text.endswith("Hello."),
           answers[0].text[-40:] if answers else "")
 
+    # A SILENT persona's recogniser keeps accumulating, because its Agora
+    # history never advances. By the fourth question its "latest" is every
+    # answer run together — and "prefer the longest" would then replace the
+    # current answer with a transcript of the whole interview. That is what put
+    # previous answers inside the current one from the second interviewer on.
+    session = reset_session("t-swallow")
+    session.roles = ["technical", "product"]
+    first = ("We sharded Postgres by tenant id and cut the p99 on the billing "
+             "query from four hundred milliseconds to sixty.")
+    second = "It was mostly for the three largest customers on the platform."
+
+    session.turns.add("technical", "Tell me about scaling.")
+    _advance(session, [{"role": "user", "content": first}])
+    for t in session.turns.all():
+        t.started_at -= 60.0
+        t.ended_at -= 60.0
+    session.turns.add("product", "Who was it for?")
+    _advance(session, [{"role": "user", "content": second}])
+
+    # The silent agent now reports both answers concatenated.
+    _advance(session, [{"role": "user", "content": f"{first} {second}"}])
+
+    answers = session.turns.by_speaker("candidate")
+    check("an accumulated transcript does not swallow the last answer",
+          len(answers) == 2 and answers[1].text == second,
+          answers[1].text[:70] if len(answers) > 1 else str(len(answers)))
+    check("and the earlier answer is left alone",
+          answers and answers[0].text == first,
+          answers[0].text[:50] if answers else "")
+
+    # THE ACCUMULATION KEEPS GROWING, so one strip is not enough.
+    #
+    # Taken from a real four-persona interview. By the fourth question the
+    # silent agents' "latest" was every answer so far run together, and the
+    # transcript showed the whole interview replayed inside each new answer.
+    # Removing one prefix and stopping fixed the second answer and left every
+    # later one wrong.
+    session = reset_session("t-accum")
+    session.roles = ["technical", "product"]
+    a1 = "Hello. Uh, can you please repeat the question? Uh, I don't know about this."
+    a2 = a1 + " I'm not sure about that."
+    a3 = a2 + (" Uh, I'm not sure about. That. I'm not sure about that. Uh, the "
+               "operational cost will be very high, because ships carry millions.")
+    a4 = a3 + (" Uh, we used to decide on the traffic flow, and the green light "
+               "time given for that traffic flow.")
+
+    for who, said in [("technical", a1), ("technical", a2),
+                      ("product", a3), ("product", a4)]:
+        session.turns.add(who, "A question?")
+        for t in session.turns.all():
+            t.started_at -= 60.0
+            t.ended_at -= 60.0
+        _advance(session, [{"role": "user", "content": said}])
+
+    said = session.turns.by_speaker("candidate")
+    check("each answer holds only what was said in it", len(said) == 4,
+          str(len(said)))
+    check("the second answer drops the first",
+          said[1].text == "I'm not sure about that.", said[1].text[:60])
+    check("and the third drops both before it",
+          said[2].text.startswith("Uh, I'm not sure about. That."), said[2].text[:60])
+    check("and the fourth is only the new sentence",
+          said[3].text.startswith("Uh, we used to decide on the traffic flow"),
+          said[3].text[:60])
+    check("no answer replays a previous one",
+          not any(said[0].text in t.text for t in said[1:]),
+          [t.text[:40] for t in said[1:]])
+
+    # Saying the same thing twice is a real answer — a stuck or evasive
+    # candidate does exactly that — and must not be stripped to nothing.
+    session = reset_session("t-repeat")
+    session.roles = ["technical"]
+    twice = "I am really not sure about that at all."
+    for _ in range(2):
+        session.turns.add("technical", "Can you be specific?")
+        for t in session.turns.all():
+            t.started_at -= 60.0
+            t.ended_at -= 60.0
+        _advance(session, [{"role": "user", "content": twice}])
+    check("repeating an answer verbatim is still recorded",
+          len(session.turns.by_speaker("candidate")) == 2
+          and session.turns.by_speaker("candidate")[1].text == twice,
+          str([t.text[:30] for t in session.turns.by_speaker("candidate")]))
+
     # A mid-sentence fragment must still be recognised as the same sentence —
     # a prefix test says these two are unrelated.
     from src.contract import _overlaps
@@ -475,10 +559,14 @@ def test_agents_disagree_about_the_words() -> None:
 
     # After the panel replies, the next thing they say is a NEW answer even if
     # it lands quickly — otherwise a fast conversation records nothing.
-    session.turns.add("product", "And who was that for?")
+    session = reset_session("t-next")
+    session.roles = ["technical", "product"]
+    session.turns.add("technical", "Tell me about the agents.")
+    _advance(session, [{"role": "user", "content": heard[3]}])
     for t in session.turns.all():
         t.started_at -= 60.0
         t.ended_at -= 60.0
+    session.turns.add("product", "And who was that for?")
     _advance(session, [{"role": "user", "content": "It was for the ops team, mainly."}])
     check("a later answer is still recorded as its own turn",
           len(session.turns.by_speaker("candidate")) == 2,

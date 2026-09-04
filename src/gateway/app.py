@@ -737,6 +737,53 @@ async def delete_interview(session_id: str, authorization: str = Header(default=
     return {"deleted": session_id, "agents_stopped": len(agents)}
 
 
+@app.delete("/jobs/{job_id}")
+async def delete_job(job_id: str, authorization: str = Header(default="")):
+    """Remove an opening and every interview under it. Operator only.
+
+    Openings are the thing you create most while learning the product — a test
+    advert, a wrong title, a CV pasted into the wrong one — and until now there
+    was no way to remove any of them. A dashboard nobody can tidy is a
+    dashboard nobody reads, and on a demo screen it is worse than that.
+
+    Refuses if ANY interview under it carries a hiring decision. Cascading a
+    delete through a recorded decision is precisely what an audit trail exists
+    to prevent, and doing it as a side effect of tidying up would be the worst
+    version of it.
+    """
+    caller = _signed_in(authorization)
+    if caller.role != users.OPERATOR:
+        raise HTTPException(403, "forbidden")
+    _own_job(caller, job_id)
+
+    rows = db.interviews_for_job(job_id)
+    decided = [r["candidate_name"] or r["session_id"] for r in rows if r["decision"]]
+    if decided:
+        raise HTTPException(
+            409,
+            f"{', '.join(decided)} has a hiring decision recorded. Delete that "
+            f"interview's decision first, or keep this opening.",
+        )
+
+    # Stop anything still live before the rows go, or agents are left in a
+    # channel billing with nothing that knows they are there.
+    from src.agora import session as panel
+    from src.state.session import drop_session
+
+    stopped = 0
+    for r in rows:
+        agents = panel.forget(r["session_id"])
+        if agents:
+            await panel.stop(agents)
+            stopped += len(agents)
+        drop_session(r["session_id"])
+
+    removed = db.delete_job(job_id)
+    log.info("job %s deleted with %d interviews (%d agents stopped)",
+             job_id, removed, stopped)
+    return {"deleted": job_id, "interviews": removed, "agents_stopped": stopped}
+
+
 @app.post("/interviews/{session_id}/decision")
 async def decide(
     session_id: str, request: Request, authorization: str = Header(default="")

@@ -130,13 +130,23 @@ def _advance(session: SessionState, messages: list) -> None:
         #
         # So within the window, anything arriving is the SAME utterance heard
         # by a different ear. Time is the reliable signal; the words are not.
-        if _better(last.text, latest):
+        if _better(last.text, latest) and not _swallows_earlier(session, last, latest):
             session.turns.extend(last.turn_id, latest)
             # Let the floor holder answer the COMPLETED sentence. Without this
             # the panel replies to a fragment and then never speaks again.
             session.spoke_after_answers = -1
             log.info("turn %d: kept the fuller transcript (%d -> %d chars)",
                      last.turn_id, len(last.text), len(latest))
+        return
+
+    # Cut off whatever they already said. A persona that stays silent never has
+    # its Agora history advanced, so its recogniser keeps accumulating: by the
+    # fourth question its "latest" is EVERY answer so far, run together. When
+    # that arrives outside the same-utterance window it becomes a new turn, and
+    # the transcript then shows the whole interview replayed inside one answer —
+    # which is what the marking engine scores and what the operator reads.
+    latest = _without_recorded(session, latest)
+    if not latest:
         return
 
     turn_id = session.turns.add("candidate", latest, difficulty=session.difficulty)
@@ -206,6 +216,99 @@ def _overlaps(a: str, b: str) -> bool:
     if not x or not y:
         return False
     return len(x & y) / min(len(x), len(y)) >= 0.5
+
+
+def _without_recorded(session: SessionState, latest: str) -> str:
+    """Drop any already-recorded answer from the front of this transcript.
+
+    Compared word by word rather than by exact string: the accumulation is
+    re-recognised each time, so "hamper much" comes back as "hamper. Much." and
+    an exact substring test misses it entirely. Words survive that; punctuation
+    and capitalisation do not.
+
+    Longest recorded answer first, so the largest prefix is removed rather than
+    the earliest one — otherwise stripping the first answer leaves the second
+    and third still glued to the front.
+    """
+    def key(text: str) -> list:
+        return [w.strip(".,!?;:").lower() for w in text.split() if w.strip(".,!?;:")]
+
+    recorded = sorted(session.turns.by_speaker("candidate"),
+                      key=lambda t: -len(t.text))
+    original = latest
+    stripped = []
+
+    # REPEATEDLY, because the accumulation is every previous answer in a row.
+    # Removing one prefix and stopping left the next one still glued to the
+    # front — the transcript looked fixed for the second answer and wrong for
+    # every answer after it.
+    changed = True
+    while changed:
+        changed = False
+        words = latest.split()
+        plain = key(latest)
+
+        for turn in recorded:
+            earlier = key(turn.text)
+            # Four words is enough to be a real clause — "I'm not sure about
+            # that" is a whole answer a nervous candidate gives repeatedly.
+            # Below that it is a word or two that could genuinely open two
+            # different answers.
+            if len(earlier) < 4 or len(earlier) >= len(plain):
+                continue
+            if plain[: len(earlier)] != earlier:
+                continue
+
+            # Map back to the original text by word count — normalisation only
+            # touched punctuation, so the counts line up.
+            kept, skipped = [], 0
+            for word in words:
+                if skipped < len(earlier) and word.strip(".,!?;:"):
+                    skipped += 1
+                    continue
+                kept.append(word)
+            trimmed = " ".join(kept).strip()
+            if not trimmed:
+                # Nothing left means they said the same thing again rather than
+                # continuing — a real answer, and what a stuck or evasive
+                # candidate does. Keep it rather than losing the turn.
+                return original
+            latest, changed = trimmed, True
+            stripped.append(turn.turn_id)
+            break
+
+    if stripped:
+        log.info("stripped turns %s from an accumulated transcript (%d -> %d chars)",
+                 stripped, len(original), len(latest))
+    return latest
+
+
+def _swallows_earlier(session: SessionState, last, latest: str) -> bool:
+    """Does this transcript contain answers we have already recorded?
+
+    A persona that stays silent never has its Agora history advanced, so its
+    recogniser keeps accumulating: by the fourth question its "latest user
+    message" is every answer the candidate has given, run together. Because
+    `_better` prefers the LONGEST rendering, that accumulation would replace
+    the current answer with a concatenation of the whole interview — which is
+    exactly what put previous answers inside the current one from Arjun's turn
+    onward.
+
+    Longest is the right rule for two renderings of ONE sentence. It is the
+    wrong rule when the longer one is several sentences the candidate said at
+    different times, and this is how the two are told apart.
+    """
+    normalised = " ".join(latest.split()).lower()
+    for turn in session.turns.by_speaker("candidate"):
+        if turn.turn_id == last.turn_id:
+            continue
+        earlier = " ".join(turn.text.split()).lower()
+        # Long enough to be a real answer rather than "yes" appearing twice.
+        if len(earlier) >= 40 and earlier in normalised:
+            log.info("turn %d: ignoring a transcript that had swallowed turn %d",
+                     last.turn_id, turn.turn_id)
+            return True
+    return False
 
 
 def _better(recorded: str, latest: str) -> bool:

@@ -109,7 +109,7 @@ export default function Interview() {
     [panel]
   );
 
-  const teardown = useCallback(async (endedByPanel) => {
+  const teardown = useCallback(async () => {
     clearInterval(timer.current);
     // Monitoring stops FIRST, and awaited: stopping flushes the last batch and
     // closes out anything still held — an interview that ends while the
@@ -120,10 +120,27 @@ export default function Interview() {
     try { await client.current?.leave(); } catch { /* already gone */ }
     mic.current = null;
     client.current = null;
-    // Only tear the panel down if WE ended it. If the panel closed the
-    // interview itself its agents are already leaving.
-    if (!endedByPanel) { try { await api.stopPanel(sessionId); } catch { /* best effort */ } }
+
+    /* The candidate's side is finished HERE, before the server is told.
+     *
+     * /stop does far more than remove agents: it saves the transcript and
+     * totals the interview, and totalling waits for the background marking to
+     * drain — up to three minutes when the judge is rate-limited. Awaiting it
+     * left the page stuck in "live" for all that time: the End button stayed
+     * on screen after the panel had said goodbye, and Mute did nothing because
+     * the microphone had already been released. The interview was over and the
+     * page was the last to know.
+     *
+     * So the UI closes immediately and the request runs on its own. Nothing
+     * below depends on its result, and `keepalive` is not needed because the
+     * page is not going anywhere. */
     setPhase("ended");
+
+    /* ALWAYS called, including when the panel ended the interview itself.
+     * That used to be skipped, on the reasoning that the agents were already
+     * leaving — which missed that this is also what produces the assessment.
+     * Interviews that ended most cleanly were the ones with no report. */
+    api.stopPanel(sessionId).catch(() => { /* best effort */ });
   }, [sessionId]);
 
   const refresh = useCallback(async () => {
@@ -131,7 +148,7 @@ export default function Interview() {
       const state = await api.state(sessionId);
       setSpeaking(state.floor_holder);
       setTurns(state.transcript || []);
-      if (state.closed) await teardown(true);
+      if (state.closed) await teardown();
     } catch (err) {
       setError(err.message);
       clearInterval(timer.current);
@@ -415,7 +432,7 @@ export default function Interview() {
               <button className="btn-ghost" onClick={toggleMute}>
                 {muted ? "Unmute" : "Mute"}
               </button>
-              <button className="btn-danger" onClick={() => teardown(false)}>
+              <button className="btn-danger" onClick={() => teardown()}>
                 End interview
               </button>
             </>
