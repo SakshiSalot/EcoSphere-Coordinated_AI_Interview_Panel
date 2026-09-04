@@ -24,7 +24,18 @@ AGORA_APP_CERTIFICATE = os.getenv("AGORA_APP_CERTIFICATE", "").strip()
 AGORA_CUSTOMER_ID = os.getenv("AGORA_CUSTOMER_ID", "").strip()
 AGORA_CUSTOMER_SECRET = os.getenv("AGORA_CUSTOMER_SECRET", "").strip()
 AGORA_REST_BASE = "https://api.agora.io/api/conversational-ai-agent/v2/projects"
-AGORA_IDLE_TIMEOUT = int(os.getenv("AGORA_IDLE_TIMEOUT", "30"))
+# Seconds of candidate silence before Agora removes an agent from the channel.
+#
+# THIS IS A THINKING BUDGET, not a crash timer, and 30 was badly wrong: it is
+# shorter than one question-and-answer cycle. A live interview died mid-way
+# because the candidate spent more than half a minute considering "how did you
+# prioritise safety over throughput" — all four agents left, and from the
+# candidate's side the panel simply stopped existing, with no error anywhere.
+#
+# The cost of raising it is that a crashed test bills until it expires. Three
+# minutes of thinking room is worth a few stray agent-minutes; an interview
+# that ends itself because somebody paused to think is not.
+AGORA_IDLE_TIMEOUT = int(os.getenv("AGORA_IDLE_TIMEOUT", "180"))
 
 # --- Providers ---
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()

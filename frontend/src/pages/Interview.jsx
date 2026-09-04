@@ -19,6 +19,11 @@ import { createMonitor } from "../integrity";
 
 const POLL_MS = 2000;
 
+/* How long the transcript may stand still before the page says something.
+ * Comfortably longer than a slow answer plus a model call, and comfortably
+ * shorter than a candidate sitting in confused silence. */
+const STALL_MS = 75_000;
+
 /* What the candidate is told about monitoring, in the words they would use.
  *
  * Shown to them live, and not because we have to. Someone who can see exactly
@@ -94,6 +99,8 @@ export default function Interview() {
   // never arrives is visible during the interview rather than deduced from
   // the logs afterwards.
   const [voices, setVoices] = useState({});
+  const [stalled, setStalled] = useState(false);
+  const lastChange = useRef(Date.now());
 
   // Refs, not state: these are not rendered, and putting an SDK client in
   // state re-runs effects on every reconnect.
@@ -147,7 +154,20 @@ export default function Interview() {
     try {
       const state = await api.state(sessionId);
       setSpeaking(state.floor_holder);
-      setTurns(state.transcript || []);
+      const next = state.transcript || [];
+      /* Notice when the panel goes quiet.
+       *
+       * An interview died mid-way because Agora removed every agent after the
+       * candidate thought about a hard question for longer than the idle
+       * timeout. From this page it looked exactly like nothing happening: the
+       * transcript stopped growing, no error appeared, and the candidate kept
+       * talking to a room that had emptied. Silence with no explanation is the
+       * worst failure this page can show, so it now says so. */
+      setTurns((prev) => {
+        if (next.length !== prev.length) lastChange.current = Date.now();
+        return next;
+      });
+      setStalled(Date.now() - lastChange.current > STALL_MS);
       if (state.closed) await teardown();
     } catch (err) {
       setError(err.message);
@@ -358,6 +378,15 @@ export default function Interview() {
             status={integrity}
             live={phase === "live"}
           />
+        )}
+
+        {phase === "live" && stalled && (
+          <div className="notice warn">
+            <b>The panel has gone quiet.</b> Nothing has been transcribed for
+            over a minute. If you have been speaking and seeing nothing appear,
+            the interviewers have probably dropped out of the call — end the
+            interview and rejoin. Everything said so far is saved.
+          </div>
         )}
 
         {phase === "ended" && (
