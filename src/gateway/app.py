@@ -176,6 +176,33 @@ def _hydrate(session_id: str) -> int:
     return restored
 
 
+def _stage_after(session_id: str, finished: str) -> str:
+    """Where an interview stands once one of its rounds is done.
+
+    THE OPENING DECIDES HOW MANY ROUNDS THERE ARE, and that is what the old
+    version missed: it always waited for both, so an opening created with the
+    coding round switched off could never reach `complete`. The dashboard
+    showed "1 candidate · 0 complete" against a finished interview forever, the
+    leaderboard refused to rank anyone, and the interview looked abandoned when
+    it was in fact over.
+
+    An interview outside any opening has no coding round to wait for either.
+    """
+    row = db.interview(session_id)
+    if row is None:
+        return "voice_done" if finished == "voice" else "coding_done"
+
+    job = db.job(row["job_id"]) if row["job_id"] else None
+    coding_expected = bool(job["coding_enabled"]) if job else False
+
+    if finished == "voice":
+        if not coding_expected or row["stage"] in ("coding_done", "complete"):
+            return "complete"
+        return "voice_done"
+
+    return "complete" if row["stage"] in ("voice_done", "complete") else "coding_done"
+
+
 def _not_finished(session_id: str) -> None:
     """Refuse to put agents back into an interview that is already assessed.
 
@@ -1241,10 +1268,7 @@ async def stop_panel(session_id: str, authorization: str = Header(default="")):
         # exercise without the interview looking unfinished to nobody.
         if result:
             db.set_round_score(session_id, "voice", result.get("fraction", 0.0))
-        row = db.interview(session_id)
-        stage = row["stage"] if row else "invited"
-        db.set_stage(session_id,
-                     "complete" if stage in ("coding_done", "complete") else "voice_done")
+        db.set_stage(session_id, _stage_after(session_id, "voice"))
 
     log.info(
         "session %s: %d turns saved, %s",
@@ -1493,10 +1517,7 @@ async def coding_submit(session_id: str, request: Request,
     except SandboxError as exc:
         raise HTTPException(400, str(exc))
 
-    row = db.interview(session_id)
-    stage = row["stage"] if row else "invited"
-    db.set_stage(session_id,
-                 "complete" if stage in ("voice_done", "complete") else "coding_done")
+    db.set_stage(session_id, _stage_after(session_id, "coding"))
     return result
 
 

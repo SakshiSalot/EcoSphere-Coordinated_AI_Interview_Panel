@@ -128,11 +128,25 @@ function Row({ row, codingEnabled, onOpen, onRemove, removing }) {
   const pct = row.score === null || row.score === undefined
     ? null : Math.round(row.score * 100);
 
+  /* Openable as soon as the interview has STARTED, not only when it is
+   * finished.
+   *
+   * Rows used to be disabled until `complete`, which conflated two different
+   * things: whether a candidate can be RANKED against the others, and whether
+   * there is anything to read. A candidate who has done the conversation and
+   * not yet the coding round has a full transcript, marks, evidence quotes and
+   * an integrity log — and no way to open any of it. The score sat on screen
+   * with nothing behind it.
+   *
+   * Ranking still waits for completion; reading does not. */
+  const started = row.stage !== "invited";
+
   return (
     <button
       className={`board-row ${row.complete ? "" : "pending"}`}
-      onClick={() => row.complete && onOpen(row.session_id)}
-      disabled={!row.complete}
+      onClick={() => started && onOpen(row.session_id)}
+      disabled={!started}
+      title={started ? "Open the assessment" : "This candidate has not started"}
     >
       <span className="rank">{row.complete && row.rank ? row.rank : "·"}</span>
 
@@ -168,10 +182,16 @@ function Row({ row, codingEnabled, onOpen, onRemove, removing }) {
         {pct === null ? <span className="muted">—</span> : `${pct}%`}
       </span>
 
-      <span className="badges">
+      {/* The decision gets its OWN column rather than sharing with the invite
+        * code. Sharing put a "MAYBE" badge under a heading that said CODE —
+        * every cell should be answerable by the word above it. */}
+      <span className="decision">
         {row.decision && (
           <span className={`badge ${row.decision}`}>{DECISION[row.decision]}</span>
         )}
+      </span>
+
+      <span className="badges">
         <Code code={row.invite_code} />
         {/* A recorded decision is the reason somebody was hired or not. The
           * server refuses to delete one, so do not offer it here either. */}
@@ -303,6 +323,7 @@ export default function JobDetail() {
                 <span className="basis">What it was measured on</span>
                 <span className="rounds">Rounds</span>
                 <span className="score">Score</span>
+                <span className="decision">Decision</span>
                 <span className="badges">Code</span>
               </div>
               {rows.map((r) => (

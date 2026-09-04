@@ -332,8 +332,12 @@ button.item:hover:not(:disabled) { border-color: var(--accent); transform: trans
 .item .meta { color: var(--muted); font-size: 14px; }
 .item .badges { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
 
-.score { font-family: var(--display); font-weight: 800; font-size: 24px; }
-.score small { font-family: var(--body); font-size: 13px; color: var(--muted); font-weight: 400; }
+/* Scoped to the interview list it was written for. Unscoped, this 24px rule
+   also hit the leaderboard's SCORE column HEADING — a direct rule always beats
+   an inherited one, so `.board-head`'s 11.5px lost — and the word overflowed
+   its column and printed on top of CODE. */
+.item .score { font-family: var(--display); font-weight: 800; font-size: 24px; }
+.item .score small { font-family: var(--body); font-size: 13px; color: var(--muted); font-weight: 400; }
 
 .panel-list { display: grid; gap: 10px; }
 .who-row {
@@ -584,9 +588,16 @@ button.item:hover:not(:disabled) { border-color: var(--accent); transform: trans
   background: var(--surface); border: 1px solid var(--line);
   border-radius: var(--radius); overflow: hidden;
 }
+/* FIXED widths on the last three columns, not `auto`.
+   The heading and each row are SEPARATE grid containers, so an `auto` column
+   sizes itself from its own contents — the heading's short word "Code" and a
+   row's code chip plus Delete button produced different widths, and every
+   heading sat over the wrong column. Only a fixed track makes two independent
+   grids agree. */
 .board-head, .board-row {
   display: grid; gap: 14px; align-items: center;
-  grid-template-columns: 28px minmax(120px, 1.4fr) minmax(0, 1.6fr) auto 62px auto;
+  grid-template-columns:
+    28px minmax(110px, 1.3fr) minmax(0, 1.4fr) 92px 58px 84px 132px;
   padding: 14px 18px; width: 100%; text-align: left;
 }
 .board-head {
@@ -616,12 +627,14 @@ button.item:hover:not(:disabled) { border-color: var(--accent); transform: trans
   font-variant-numeric: tabular-nums; text-align: right;
 }
 .board-row .badges { display: flex; gap: 6px; align-items: center; }
+.board-row .decision, .board-head .decision { min-width: 0; }
 
 @media (max-width: 860px) {
   .board-head { display: none; }
   .board-row {
     grid-template-columns: 28px 1fr auto;
-    grid-template-areas: "rank who score" ". basis basis" ". rounds badges";
+    grid-template-areas: "rank who score" ". basis basis" ". rounds badges"
+                         ". decision decision";
     row-gap: 8px;
   }
   .board-row .rank { grid-area: rank; }
@@ -630,6 +643,7 @@ button.item:hover:not(:disabled) { border-color: var(--accent); transform: trans
   .board-row .rounds { grid-area: rounds; }
   .board-row .score { grid-area: score; }
   .board-row .badges { grid-area: badges; justify-content: flex-end; }
+  .board-row .decision { grid-area: decision; }
 }
 
 /* An invite code, which is also a copy button. */
