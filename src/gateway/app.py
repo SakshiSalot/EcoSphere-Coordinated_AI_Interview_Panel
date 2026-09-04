@@ -1126,7 +1126,12 @@ async def start_panel(
         # browser: personas.yaml is the one place a persona is defined, and a
         # page that duplicates it shows "Priya" after somebody renames her.
         "panel": [
-            {"role": r, "name": persona(r)["name"], "title": persona(r)["title"]}
+            # The uid too: it is how the browser matches an audio track to a
+            # face on the panel list. Without it a persona whose voice never
+            # arrives is indistinguishable from one who simply has not been
+            # asked to speak yet.
+            {"role": r, "name": persona(r)["name"], "title": persona(r)["title"],
+             "uid": persona(r)["uid"]}
             for r in agents
         ],
     }

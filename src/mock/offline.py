@@ -67,8 +67,19 @@ def _stub_providers() -> None:
     nothing and can be run as a habit.
     """
     from src.analysis import pipeline
+    from src.conductor.personas import set_panel
 
     pipeline.set_enabled(False)
+
+    # Pin the panel, so .env cannot change what this suite tests.
+    #
+    # These fixtures reason about specific turn numbers — "the floor returns to
+    # whoever asked turn 1" — and the number of personas decides how the turns
+    # are numbered. Reading PANEL_ROLES from .env meant that switching the demo
+    # to four interviewers broke a contradiction-routing test that had nothing
+    # to do with the change. A suite whose result depends on the developer's
+    # configuration is not a regression suite.
+    set_panel(["technical", "product"])
 
     questions = {
         "technical": "Tell me about a system you scaled. What actually broke first?",
@@ -135,6 +146,20 @@ def _turn(session_id: str, history: list, answer: str | None) -> tuple[str, str]
     history.append({"role": "assistant", "content": said})
     if answer is not None:
         history.append({"role": "user", "content": answer})
+
+    # Age the conversation, because this harness drives six turns in
+    # milliseconds and a real one takes minutes.
+    #
+    # `contract` treats candidate text arriving within seconds of the last
+    # answer as another AGENT'S rendering of that same answer — which is what
+    # it is, since all four call at once. Without backdating, every synthetic
+    # turn here lands inside that window and the suite tests a situation that
+    # cannot occur: a candidate answering twice inside one second.
+    from src.state.session import get_session
+
+    for t in get_session(session_id).turns.all():
+        t.started_at -= 60.0
+        t.ended_at -= 60.0
     return role, said
 
 
@@ -358,6 +383,106 @@ RESUME = """Harsh Raj - Backend Engineer
 Built a payments retry layer in Python with idempotency keys in Redis.
 Migrated ingestion to RabbitMQ and instrumented it with Prometheus.
 Sharded Postgres on tenant id to cut checkout latency."""
+
+
+def test_agents_disagree_about_the_words() -> None:
+    """One answer, four recognisers, four different transcripts.
+
+    Every Agora agent runs its OWN speech recognition over the same audio and
+    segments it differently. A live four-persona run produced these three for
+    a single sentence, inside one second:
+
+      behavioural     "Hello.  I'm not sure about that.  Obviously the few agents working at "
+      hiring_manager  "Hello.  I'm not sure about that.  Obviously the few agents working at "
+      technical       " Obviously the few agents working at SMI each own for each direction, "
+
+    The old check asked whether the text was identical or a growing prefix.
+    Priya's rendering is neither — it starts mid-sentence — so one answer was
+    recorded as three, and the phantom answers then tripped the
+    one-utterance-per-answer guard and silenced the whole panel.
+    """
+    print("\n\033[1mfour agents, four transcripts, one answer\033[0m")
+    from src.contract import _advance
+
+    session = reset_session("t-asr")
+    session.roles = ["technical", "product"]
+    session.turns.add("technical", "Tell me about the agents you built.")
+
+    heard = [
+        "Hello.  I'm not sure about that.  Obviously the few agents working at ",
+        "Hello.  I'm not sure about that.  Obviously the few agents working at ",
+        " Obviously the few agents working at SMI each own for each direction, ",
+        "Hello. I'm not sure about that. Obviously the few agents working at SMI "
+        "each own for each direction, and they coordinate over a shared queue.",
+    ]
+    for text in heard:
+        _advance(session, [{"role": "user", "content": text}])
+
+    answers = session.turns.by_speaker("candidate")
+    check("one utterance becomes ONE turn, not four", len(answers) == 1,
+          f"{len(answers)} turns: {[t.text[:40] for t in answers]}")
+    # Keeping whichever agent arrived first meant sometimes keeping a fragment
+    # that began mid-sentence.
+    check("and the fullest transcript is the one kept",
+          answers and "shared queue" in answers[0].text,
+          answers[0].text[:70] if answers else "")
+
+    # A LONG answer is reported repeatedly across the whole time it takes to
+    # say it, and the window has to be measured from the last report rather
+    # than from when the turn was created.
+    #
+    # This is the bug that survived the first fix. A thirty-second answer had
+    # its window expire while the candidate was still speaking, so the final —
+    # fullest — report was filed as a SECOND answer, and the same reply showed
+    # up under two different interviewers on screen.
+    session = reset_session("t-slow")
+    session.roles = ["technical", "product"]
+    session.turns.add("technical", "Tell me about the agents.")
+
+    _advance(session, [{"role": "user", "content": "Hello. Also, my dog—"}])
+    for elapsed, text in [
+        (7, "Hello. Also, my dog— Uh, basically we are keeping 4 agents each "
+            "for one side of the crossing."),
+        (7, "Hello. Also, my dog— Uh, basically we are keeping 4 agents each "
+            "for one side of the crossing. Each one talks to the other three "
+            "to check the vehicle flow."),
+        (7, "Hello. Also, my dog— Uh, basically we are keeping 4 agents each "
+            "for one side of the crossing. Each one talks to the other three "
+            "to check the vehicle flow, and we reward correct timing. Hello."),
+    ]:
+        # Time passes while they keep talking; each agent reports as it settles.
+        for t in session.turns.all():
+            t.started_at -= elapsed
+            t.ended_at -= elapsed
+        _advance(session, [{"role": "user", "content": text}])
+
+    answers = session.turns.by_speaker("candidate")
+    check("a 20-second answer is still ONE turn", len(answers) == 1,
+          f"{len(answers)} turns: {[t.text[:32] for t in answers]}")
+    check("and it holds the complete sentence",
+          answers and answers[0].text.endswith("Hello."),
+          answers[0].text[-40:] if answers else "")
+
+    # A mid-sentence fragment must still be recognised as the same sentence —
+    # a prefix test says these two are unrelated.
+    from src.contract import _overlaps
+
+    check("a fragment starting mid-sentence still matches",
+          _overlaps(heard[0], heard[2]))
+    check("but two genuinely different answers do not",
+          not _overlaps("We sharded Postgres on tenant id.",
+                        "I mentored two juniors through their first on-call."))
+
+    # After the panel replies, the next thing they say is a NEW answer even if
+    # it lands quickly — otherwise a fast conversation records nothing.
+    session.turns.add("product", "And who was that for?")
+    for t in session.turns.all():
+        t.started_at -= 60.0
+        t.ended_at -= 60.0
+    _advance(session, [{"role": "user", "content": "It was for the ops team, mainly."}])
+    check("a later answer is still recorded as its own turn",
+          len(session.turns.by_speaker("candidate")) == 2,
+          str(len(session.turns.by_speaker("candidate"))))
 
 
 def test_resume_contradiction() -> None:
@@ -906,6 +1031,7 @@ def main() -> int:
     test_vague_holds_floor()
     test_contradiction_routing()
     test_contradiction_detection()
+    test_agents_disagree_about_the_words()
     test_resume_contradiction()
     test_told_two_interviewers_differently()
     test_scenarios()

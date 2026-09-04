@@ -89,9 +89,24 @@ echo "  checking Agora can reach it"
 # later — and a warning that cries wolf is worse than no warning, because this
 # particular one is the difference between a working demo and silent agents.
 REACHABLE=""
+HOST=${URL#https://}
 for _ in 1 2 3 4 5 6; do
   if curl -fsS --max-time 10 "$URL/health" >/dev/null 2>&1; then
     REACHABLE=yes
+    break
+  fi
+  # Ask a PUBLIC resolver before giving up. A home router or ISP resolver
+  # often has not picked up a hostname created seconds ago and answers
+  # NXDOMAIN, while 1.1.1.1 resolves it immediately — and Agora uses public
+  # DNS, not yours. Without this the script reported "agents will join and
+  # stay silent" about a tunnel that was working perfectly for everyone
+  # except this laptop, which is the worst possible thing for this particular
+  # warning to be wrong about.
+  IP=$(nslookup "$HOST" 1.1.1.1 2>/dev/null | awk '/^Address: /{print $2; exit}')
+  if [ -n "${IP:-}" ] && curl -fsS --max-time 10 --resolve "$HOST:443:$IP" \
+        "$URL/health" >/dev/null 2>&1; then
+    REACHABLE=yes
+    echo "  (your local DNS has not caught up yet — reachable via public DNS)"
     break
   fi
   sleep 3

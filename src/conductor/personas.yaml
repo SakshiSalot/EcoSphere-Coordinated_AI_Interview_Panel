@@ -33,6 +33,19 @@
 # re-check after any account change — it joins and leaves immediately, so it
 # costs seconds rather than minutes.
 #
+# VOICE IDS: BEING ACCEPTED IS NOT THE SAME AS BEING AUDIBLE.
+#
+# Agora validates the voice NAME when an agent joins and says nothing about
+# whether that voice can actually be synthesised on this SKU. Four personas all
+# joined cleanly and only one was ever heard: `English_captivating_female1`
+# produced audio, while `English_magnetic_male`, `Wise_Woman` and
+# `English_Gentle-voiced_man` were accepted, received their text, and published
+# no audio track at all. The browser console proved it — `unmute-audio` fired
+# for uid 1001 and for nobody else, for a whole five-minute interview.
+#
+# So a voice is only known-good once a human has HEARD it. Changing one is a
+# live test, not a config edit. If a persona goes silent, this is the first
+# thing to suspect, and `scripts/probe_tts.py` will NOT catch it.
 # For Hindi, MiniMax voice ids exist per language; swap voice_id only.
 # Nothing in the code reads these values — the whole tts block is passed
 # through to Agora verbatim.
@@ -90,7 +103,7 @@ behavioural:
       url: wss://api-uw.minimax.io/ws/v1/t2a_v2
       model: speech-2.6-turbo
       voice_setting:
-        voice_id: Wise_Woman
+        voice_id: English_Graceful_Lady
         speed: 1.0
       audio_setting:
         sample_rate: 44100
@@ -128,7 +141,7 @@ product:
       url: wss://api-uw.minimax.io/ws/v1/t2a_v2
       model: speech-2.6-turbo
       voice_setting:
-        voice_id: English_magnetic_male
+        voice_id: English_Trustworth_Man
         speed: 1.0
       audio_setting:
         sample_rate: 44100
@@ -173,7 +186,7 @@ hiring_manager:
       url: wss://api-uw.minimax.io/ws/v1/t2a_v2
       model: speech-2.6-turbo
       voice_setting:
-        voice_id: English_Gentle-voiced_man
+        voice_id: English_SereneWoman
         speed: 1.0
       audio_setting:
         sample_rate: 44100

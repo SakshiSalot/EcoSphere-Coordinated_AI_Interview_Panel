@@ -106,34 +106,38 @@ def _advance(session: SessionState, messages: list) -> None:
 
     last = session.turns.last_candidate()
 
-    if last is not None:
-        if _same(last.text, latest):
-            # Identical text means one of two very different things, and the
-            # only signal that separates them reliably is TIME:
-            #
-            #   moments ago -> this is another persona's request for the same
-            #                  turn. Agora calls every agent at once, and they
-            #                  land in an unpredictable order.
-            #   a while ago -> the candidate genuinely said the same thing
-            #                  again, which is what a stuck or evasive one does.
-            #
-            # Anything based on "has a persona replied yet" is ordering-
-            # dependent and duplicates the turn when a slow agent's request
-            # arrives after the floor holder has already spoken.
-            if time.time() - last.started_at < SAME_TURN_WINDOW:
-                return
-
-        # Same turn, more words. Agora calls the moment it thinks a turn ended
-        # and calls again as the candidate carries on, so the last message
-        # grows between calls. Extend rather than drop, or the transcript — and
-        # everything marked from it — keeps half a sentence.
-        if _extends(last.text, latest):
+    if last is not None and _same_utterance(session, last, latest):
+        # Touched, so the window is measured from now rather than from when
+        # this turn was first created. Four agents reporting a long answer
+        # trickle in over the whole time it takes to say it.
+        session.turns.extend(last.turn_id)
+        # EVERY AGENT HEARS THE CANDIDATE SEPARATELY, and they do not agree.
+        #
+        # Each Agora agent runs its own speech recognition over the same audio,
+        # with its own endpointing, so four agents produce four different
+        # transcripts of one sentence. A live four-persona run logged these
+        # three within the same second:
+        #
+        #   behavioural     "Hello.  I'm not sure about that.  Obviously the few agents working at "
+        #   hiring_manager  "Hello.  I'm not sure about that.  Obviously the few agents working at "
+        #   technical       " Obviously the few agents working at SMI each own for each direction, "
+        #
+        # The old test asked whether the text was IDENTICAL or a growing
+        # PREFIX. Priya's rendering is neither — it starts mid-sentence — so it
+        # became a third candidate turn, and one answer was recorded as three.
+        # Those phantom answers then tripped the one-utterance-per-answer
+        # guard and silenced the rest of the panel for the turn.
+        #
+        # So within the window, anything arriving is the SAME utterance heard
+        # by a different ear. Time is the reliable signal; the words are not.
+        if _better(last.text, latest):
             session.turns.extend(last.turn_id, latest)
             # Let the floor holder answer the COMPLETED sentence. Without this
             # the panel replies to a fragment and then never speaks again.
             session.spoke_after_answers = -1
-            log.info("turn %d extended to %d chars", last.turn_id, len(latest))
-            return
+            log.info("turn %d: kept the fuller transcript (%d -> %d chars)",
+                     last.turn_id, len(last.text), len(latest))
+        return
 
     turn_id = session.turns.add("candidate", latest, difficulty=session.difficulty)
 
@@ -148,18 +152,78 @@ def _advance(session: SessionState, messages: list) -> None:
     log.info("turn %d -> floor: %s (%s)", turn_id, role, reason)
 
 
-def _same(a: str, b: str) -> bool:
-    return " ".join(a.split()).lower() == " ".join(b.split()).lower()
 
 
 
 
 
-def _extends(recorded: str, latest: str) -> bool:
-    """Is `latest` the same utterance, continued?"""
-    a = " ".join(recorded.split()).lower()
-    b = " ".join(latest.split()).lower()
-    return len(b) > len(a) and b.startswith(a[: max(12, len(a) // 2)])
+def _same_utterance(session: SessionState, last, latest: str) -> bool:
+    """Is this another agent's rendering of the answer we already recorded?
+
+    Two signals, and neither works alone — both were tried and both failed in
+    a live run.
+
+    NOBODY HAS REPLIED YET is the strong one. A candidate cannot produce a
+    genuinely new answer until somebody has asked them something, so while the
+    most recent turn is still theirs, anything arriving is the same speech
+    reaching us through a different agent's recogniser. This holds however
+    different the words are, which matters because the words really do differ.
+
+    But it is not sufficient on its own: a slow agent's request can land after
+    the floor holder has already replied, and treating that as new speech is
+    what duplicated turns before. So when someone HAS replied, fall back to
+    time plus overlap — recent, and recognisably the same sentence.
+    """
+    # Measured from when this utterance was LAST reported, not from when it was
+    # first recorded. A thirty-second answer is reported repeatedly across
+    # those thirty seconds as each agent's recogniser settles; measuring from
+    # the start meant the window expired while the candidate was still talking,
+    # and the final report — the fullest one — was filed as a second answer.
+    # That is exactly what put the same reply under two interviewers.
+    if time.time() - last.ended_at >= SAME_TURN_WINDOW:
+        return False
+
+    replied_since = any(
+        t.turn_id > last.turn_id and not t.is_candidate
+        for t in session.turns.all()
+    )
+    if not replied_since:
+        return True
+    return _overlaps(last.text, latest)
+
+
+def _overlaps(a: str, b: str) -> bool:
+    """Do these two look like transcripts of the same sentence?
+
+    Word overlap rather than a prefix test. Agents disagree about where an
+    utterance STARTS as well as where it ends — one begins "Hello. I'm not
+    sure about that." and another begins mid-sentence with "Obviously the few
+    agents..." — so a prefix comparison reports two renderings of one sentence
+    as unrelated.
+    """
+    x = set(" ".join(a.split()).lower().split())
+    y = set(" ".join(b.split()).lower().split())
+    if not x or not y:
+        return False
+    return len(x & y) / min(len(x), len(y)) >= 0.5
+
+
+def _better(recorded: str, latest: str) -> bool:
+    """Is this rendering of the same utterance worth keeping over what we have?
+
+    Longer wins, and by a clear margin rather than a character. Two things make
+    a later arrival longer: the candidate carried on talking between calls, and
+    one agent's recogniser simply caught more of the sentence than another's.
+    Both are reasons to prefer it — the transcript is what everything else is
+    marked against, and keeping whichever agent happened to arrive first meant
+    sometimes keeping a fragment that started mid-sentence.
+
+    The margin stops a one-word difference in punctuation or filler from
+    rewriting the turn on every one of the four calls.
+    """
+    a = " ".join(recorded.split())
+    b = " ".join(latest.split())
+    return len(b) > len(a) + 8
 
 
 def _latest_candidate_text(messages: list) -> str:

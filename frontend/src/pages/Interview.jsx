@@ -90,6 +90,10 @@ export default function Interview() {
   // declining is recorded as declined rather than silently treated as clean.
   const [watch, setWatch] = useState(true);
   const [integrity, setIntegrity] = useState(null);
+  // uid -> "ok" | "blocked" | "subscribe failed". Rendered, so a voice that
+  // never arrives is visible during the interview rather than deduced from
+  // the logs afterwards.
+  const [voices, setVoices] = useState({});
 
   // Refs, not state: these are not rendered, and putting an SDK client in
   // state re-runs effects on every reconnect.
@@ -156,9 +160,53 @@ export default function Interview() {
       const creds = await api.joinCredentials(sessionId);
 
       rtc = window.AgoraRTC.createClient({ mode: "rtc", codec: "vp8" });
+
+      /* SUBSCRIBING IS THE PART THAT SILENTLY FAILED.
+       *
+       * This used to be three lines with no error handling, inside an async
+       * event handler — so any rejection was swallowed with nothing logged.
+       * A live four-persona run had Priya audible every time and Arjun and
+       * Meera silent, while the gateway showed it had streamed their replies
+       * and Agora had accepted their voices. There was no way to tell whether
+       * the failure was Agora's synthesis or this line, because this line
+       * could not report anything.
+       *
+       * Now: every rejection is caught and named, `play()` gets one retry
+       * (the track is occasionally not ready the instant it is subscribed),
+       * and the count of connected voices is shown on screen — so the next
+       * failure names itself instead of being deduced from logs. */
       rtc.on("user-published", async (user, kind) => {
-        await rtc.subscribe(user, kind);
-        if (kind === "audio") user.audioTrack.play();
+        try {
+          await rtc.subscribe(user, kind);
+        } catch (err) {
+          console.error(`[audio] could not subscribe to ${user.uid}:`, err);
+          setVoices((v) => ({ ...v, [user.uid]: "subscribe failed" }));
+          return;
+        }
+        if (kind !== "audio") return;
+
+        const play = async () => { await user.audioTrack.play(); };
+        try {
+          await play();
+          console.info(`[audio] playing uid ${user.uid}`);
+          setVoices((v) => ({ ...v, [user.uid]: "ok" }));
+        } catch (err) {
+          // Most often the browser's autoplay policy, or a track that was not
+          // ready yet. One retry after a beat clears the second case.
+          console.warn(`[audio] first play failed for ${user.uid}:`, err);
+          setTimeout(() => {
+            play()
+              .then(() => setVoices((v) => ({ ...v, [user.uid]: "ok" })))
+              .catch((e) => {
+                console.error(`[audio] uid ${user.uid} will not play:`, e);
+                setVoices((v) => ({ ...v, [user.uid]: "blocked" }));
+              });
+          }, 400);
+        }
+      });
+
+      rtc.on("user-unpublished", (user) => {
+        console.info(`[audio] uid ${user.uid} stopped publishing`);
       });
 
       // 3. The candidate enters the room. uid null: the RTC token is minted
@@ -305,15 +353,31 @@ export default function Interview() {
         <div className="card">
           {panel.length > 0 ? (
             <div className="panel-list" style={{ marginBottom: 18 }}>
-              {panel.map((p) => (
-                <div key={p.role} className={`who-row ${p.role === speaking ? "speaking" : ""}`}>
-                  <span className="dot" />
-                  <span>
-                    <b>{p.name}</b> <span className="title">· {p.title}</span>
-                  </span>
-                  <span className="now">Speaking</span>
-                </div>
-              ))}
+              {panel.map((p) => {
+                /* "Next to speak", not "Speaking". The server tells us who
+                 * holds the FLOOR — which is who will ask the next question,
+                 * not who is making sound right now. Labelling that "Speaking"
+                 * had Meera shown as talking while the room was silent, and
+                 * sent us looking for an audio bug that was really a wording
+                 * bug. Whether her voice is actually connected is a different
+                 * fact, and it now has its own indicator. */
+                const audio = voices[p.uid];
+                return (
+                  <div key={p.role}
+                       className={`who-row ${p.role === speaking ? "speaking" : ""}`}>
+                    <span className="dot" />
+                    <span>
+                      <b>{p.name}</b> <span className="title">· {p.title}</span>
+                    </span>
+                    {phase === "live" && audio !== "ok" && (
+                      <span className="voice-warn" title="Their audio has not arrived">
+                        {audio ? "no audio" : "connecting…"}
+                      </span>
+                    )}
+                    <span className="now">Next to speak</span>
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <p className="muted small" style={{ marginBottom: 18 }}>

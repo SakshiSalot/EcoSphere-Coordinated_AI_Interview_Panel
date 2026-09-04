@@ -686,3 +686,13 @@ button.item:hover:not(:disabled) { border-color: var(--accent); transform: trans
   white-space: pre-wrap; word-break: break-word;
 }
 .runout pre.err { color: var(--bad); }
+
+/* A persona whose audio has not arrived. Sits beside their name during the
+   call, because "we can see her name but hear nothing" is otherwise something
+   the candidate has to work out for themselves. */
+.who-row .voice-warn {
+  margin-left: auto; font-size: 11.5px; font-weight: 600;
+  color: var(--warn); background: var(--warn-bg);
+  padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+}
+.who-row .voice-warn + .now { margin-left: 10px; }

@@ -41,18 +41,29 @@ class TurnLedger:
         self._turns.append(turn)
         return turn.turn_id
 
-    def extend(self, turn_id: int, text: str) -> bool:
-        """Replace a turn's text with a longer version of itself.
+    def extend(self, turn_id: int, text: str = "") -> bool:
+        """Replace a turn's text with a fuller version, and mark it still live.
 
         Agora sends a partial transcript the moment it thinks a turn ended,
         then sends it again as the candidate keeps talking. Recording only the
         first fragment leaves the transcript — and everything marked from it —
         holding half a sentence.
+
+        `ended_at` is bumped on EVERY touch, including one that brings no new
+        words. It is what "how long since we last heard about this utterance"
+        is measured against, and measuring from `started_at` instead was a real
+        bug: a thirty-second answer had its window expire while the candidate
+        was still speaking, so the last agent to report was treated as a whole
+        new answer and the reply was recorded twice.
+
+        Called with no text to refresh the clock alone.
         """
         turn = self.get(turn_id)
         if turn is None:
             return False
-        turn.text = text
+        if text:
+            turn.text = text
+        turn.ended_at = time.time()
         return True
 
     def get(self, turn_id: int) -> Turn | None:
