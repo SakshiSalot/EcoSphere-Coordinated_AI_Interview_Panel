@@ -760,6 +760,24 @@ def test_guardrails_and_introductions() -> None:
     check("the second voice introduces itself too",
           "arjun" in second.lower(), second[:70])
 
+    # EVERY voice discloses, not just the opening one.
+    #
+    # A candidate hears "every interviewer on this panel is an AI" once, and
+    # then twenty minutes later a different name with a different voice starts
+    # asking about customers. Relying on them to carry that blanket statement
+    # across a handoff is the assumption a disclosure rule exists to remove —
+    # and this has already broken silently once, when Agora ignored
+    # `greeting_message` and the disclosure was never spoken at all.
+    check("the second voice ALSO says it is an AI",
+          "an ai" in second.lower(), second[:90])
+
+    from src.conductor.personas import all_roles, introduction
+
+    missing = [r for r in all_roles()
+               if "an ai" not in introduction(r, first_ever=False).lower()]
+    check("and so does every persona that exists, including optional ones",
+          not missing, str(missing))
+
 
 def test_partial_transcripts() -> None:
     """Agora re-sends the same turn as the candidate keeps talking."""

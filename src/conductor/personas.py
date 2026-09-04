@@ -143,6 +143,19 @@ def introduction(role: str, first_ever: bool = False) -> str:
     voice simply appears mid-interview and the candidate has no idea who is
     asking or why the subject changed — which is exactly what makes a handoff
     read as a glitch rather than a panel.
+
+    AND EVERY ONE OF THEM DISCLOSES THAT IT IS AN AI. Only the opening speaker
+    used to, on the reasoning that "every interviewer on this panel is an AI"
+    covers the whole panel in one sentence. It does not, for a plain reason:
+    the candidate hears that line once, twenty minutes before a different
+    voice with a different name and a different manner starts asking about
+    customers. Expecting them to remember a blanket statement and apply it to
+    a stranger is exactly the assumption a disclosure rule exists to remove.
+
+    So the first voice gives the full welcome, and each later voice says it
+    plainly again on its own first turn. It costs one clause and removes any
+    moment where somebody could reasonably think they had been handed to a
+    person.
     """
     p = persona(role)
     if first_ever:
@@ -151,7 +164,10 @@ def introduction(role: str, first_ever: bool = False) -> str:
             f"interviewer on this panel is an AI, not a person. "
             f"I'm {p['name']}, your {p['title'].lower()}. "
         )
-    return f"Hello, I'm {p['name']}, the {p['title'].lower()} on this panel. "
+    return (
+        f"Hello, I'm {p['name']}, the {p['title'].lower()} on this panel. "
+        f"Like my colleagues, I'm an AI, not a person. "
+    )
 
 
 def persona_prompt(

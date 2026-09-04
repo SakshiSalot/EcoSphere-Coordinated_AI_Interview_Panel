@@ -91,6 +91,19 @@ def _verify(password: str, stored: str) -> bool:
     return hmac.compare_digest(key.hex(), key_hex)
 
 
+def _is_duplicate(exc: Exception) -> bool:
+    """Is this the database refusing a username that already exists?
+
+    SQLite says "UNIQUE constraint failed: users.username" and libsql wraps
+    the same message from the same engine, so the text is the reliable signal
+    across both — the exception TYPES are what differ.
+    """
+    if isinstance(exc, sqlite3.IntegrityError):
+        return True
+    message = str(exc).lower()
+    return "unique" in message and "constraint" in message
+
+
 def create(username: str, password: str, role: str, full_name: str = "") -> int:
     """Register an account. Returns the new user id."""
     username = (username or "").strip()
@@ -111,7 +124,21 @@ def create(username: str, password: str, role: str, full_name: str = "") -> int:
             (username, role, _hash(password, os.urandom(_SALT_BYTES)),
              full_name.strip(), time.time()),
         )
-    except sqlite3.IntegrityError:
+    except Exception as exc:
+        # Both drivers, by BEHAVIOUR rather than by type.
+        #
+        # `except sqlite3.IntegrityError` was correct for exactly as long as
+        # the database was a local file. libsql — the Turso driver — exports a
+        # single `Error` class that is not related to sqlite3's at all, so on
+        # Turso this never fired and a taken username escaped as an unhandled
+        # 500. On the sign-up screen, which is the first thing anyone touches.
+        #
+        # Matching on the message rather than catching libsql.Error wholesale:
+        # that class covers every failure the driver can have, and reporting a
+        # dropped connection as "that username is taken" would send somebody
+        # debugging the wrong thing entirely.
+        if not _is_duplicate(exc):
+            raise
         raise UserError("That username is already taken")
 
     log.info("created %s account %r (id %d)", role, username, user_id)

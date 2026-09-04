@@ -83,7 +83,20 @@ curl -fsS --max-time 3 "http://localhost:$PORT/health" >/dev/null 2>&1 \
   || { echo "  gateway failed to start:"; tail -20 /tmp/echosphere-gateway.log; exit 1; }
 
 echo "  checking Agora can reach it"
-curl -fsS --max-time 25 "$URL/health" >/dev/null 2>&1 \
+# Retried, because a fresh tunnel's edge takes a few seconds to warm up after
+# the gateway starts answering locally. A single attempt reported "agents will
+# join and stay silent" on a tunnel that was working perfectly three seconds
+# later — and a warning that cries wolf is worse than no warning, because this
+# particular one is the difference between a working demo and silent agents.
+REACHABLE=""
+for _ in 1 2 3 4 5 6; do
+  if curl -fsS --max-time 10 "$URL/health" >/dev/null 2>&1; then
+    REACHABLE=yes
+    break
+  fi
+  sleep 3
+done
+[ -n "$REACHABLE" ] \
   && echo "  reachable from the internet" \
   || echo "  WARNING: the public URL did not answer — agents will join and stay silent"
 

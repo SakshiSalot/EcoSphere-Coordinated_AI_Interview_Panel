@@ -186,6 +186,33 @@ def using_turso() -> bool:
     return bool(TURSO_URL)
 
 
+def use_local(path) -> None:
+    """Force this process onto a throwaway local file, whatever .env says.
+
+    FOR TEST SUITES ONLY, and it exists because the obvious way to isolate a
+    test stopped working the day the database moved.
+
+    The suites used to set `DB_PATH` to a temp file and rely on that. But
+    `connect()` checks TURSO_URL *first*, so on any machine with Turso
+    configured — every developer's, now — that guard silently did nothing and
+    the fixtures went into the shared database instead. That is not
+    hypothetical: a stray `turso-check-774` account was found sitting next to
+    the real ones.
+
+    Clearing the URL is what actually redirects the connection, so it is done
+    here rather than left for each suite to remember.
+    """
+    global TURSO_URL, TURSO_AUTH_TOKEN, DB_PATH
+
+    TURSO_URL = ""
+    TURSO_AUTH_TOKEN = ""
+    DB_PATH = path
+    # A connection may already have been opened on the real database by an
+    # import; drop it so the next call reconnects to the throwaway one.
+    if getattr(_local, "conn", None) is not None:
+        _local.conn = None
+
+
 def backend() -> str:
     return "turso" if using_turso() else "sqlite"
 

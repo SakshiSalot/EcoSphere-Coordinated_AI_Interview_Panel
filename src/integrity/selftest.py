@@ -25,7 +25,11 @@ from src.state import db
 # and caches the connection per thread, so redirecting it afterwards would
 # silently do nothing.
 _TMP = Path(tempfile.mkdtemp(prefix="echosphere-selftest-")) / "test.db"
-db.DB_PATH = _TMP
+# NOT `db.DB_PATH = _TMP`. That alone was the isolation until the database
+# moved to Turso, and `connect()` checks TURSO_URL before it looks at
+# DB_PATH — so on any machine with Turso in .env the guard did nothing and
+# these fixtures would land in the shared database everyone demos from.
+db.use_local(_TMP)
 
 from src.analysis import scorer                       # noqa: E402
 from src.integrity import monitor                     # noqa: E402
