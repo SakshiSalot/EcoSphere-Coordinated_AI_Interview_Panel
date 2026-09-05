@@ -710,3 +710,26 @@ button.item:hover:not(:disabled) { border-color: var(--accent); transform: trans
   padding: 2px 8px; border-radius: 999px; white-space: nowrap;
 }
 .who-row .voice-warn + .now { margin-left: 10px; }
+
+/* The two rounds, offered side by side rather than one at a time. */
+.item.static { cursor: default; }
+.item.static:hover { border-color: var(--line); transform: none; }
+
+.rounds-pick { display: grid; gap: 10px; margin-top: 14px; }
+@media (min-width: 620px) { .rounds-pick { grid-template-columns: 1fr 1fr; } }
+
+.round {
+  display: flex; align-items: center; gap: 12px; text-align: left;
+  border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px;
+  background: var(--surface); font: inherit; color: inherit; cursor: pointer;
+}
+.round:hover:not(:disabled) { border-color: var(--accent); }
+.round:disabled { cursor: default; background: var(--sunk); opacity: .8; }
+.round .what { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.round .what b { font-size: 14.5px; }
+.round .what .meta { font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.round .go {
+  margin-left: auto; font-size: 12.5px; font-weight: 700; color: var(--accent-ink);
+  white-space: nowrap;
+}
+.round.done .go { color: var(--good); font-size: 15px; }

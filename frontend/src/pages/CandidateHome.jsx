@@ -9,14 +9,38 @@ const LABEL = { ready: "Ready", live: "In progress", ended: "Completed" };
  *
  * The two rounds are taken separately — possibly days apart — so "Completed"
  * against an interview with a coding exercise outstanding would send someone
- * away thinking they were finished. The stage says which round is next, and
- * the button goes there. */
+ * away thinking they were finished. */
 const STAGE = {
-  invited:    { text: "Not started", next: "Start the conversation" },
-  voice_done: { text: "Conversation done", next: "Take the coding round" },
-  coding_done:{ text: "Coding done", next: "Take the conversation" },
-  complete:   { text: "Both rounds complete", next: null },
+  invited:    "Not started",
+  voice_done: "Conversation done",
+  coding_done:"Coding done",
+  complete:   "Both rounds complete",
 };
+
+/* BOTH ROUNDS ARE OFFERED FROM THE START, in either order.
+ *
+ * The row used to be a single button that decided for you: at `invited` it
+ * always opened the conversation, and the coding round only appeared once the
+ * conversation was finished. Nothing on the server required that — the coding
+ * endpoints have no stage guard, the question is written at curation time, and
+ * the stage machine completes correctly whichever round lands first.
+ *
+ * Forcing the order also undercut the reason the rounds were split at all:
+ * "take them whenever suits you" is not true if somebody with twenty free
+ * minutes and no quiet room to talk in cannot use them.
+ */
+function Round({ label, hint, done, onOpen }) {
+  return (
+    <button className={`round ${done ? "done" : ""}`} onClick={onOpen}
+            disabled={done}>
+      <span className="what">
+        <b>{label}</b>
+        <span className="meta">{done ? "Done — thank you." : hint}</span>
+      </span>
+      <span className="go">{done ? "✓" : "Open"}</span>
+    </button>
+  );
+}
 
 /* Entering the code an employer sent. Separate from signing in on purpose: the
  * account is theirs and lasts, the code is for one interview. */
@@ -88,15 +112,17 @@ export default function CandidateHome() {
    * curated by an employer already has its questions written, so it skips
    * Prepare entirely — sending them there would ask for the CV the panel was
    * built from. */
-  const open = (it) => {
-    if (it.stage === "voice_done" && it.coding) {
-      navigate(`/coding/${encodeURIComponent(it.session_id)}`);
-    } else if (it.stage === "invited" || it.stage === "coding_done") {
-      navigate(`/interview/${encodeURIComponent(it.session_id)}`);
-    } else {
-      navigate(`/prepare/${encodeURIComponent(it.session_id)}`);
-    }
-  };
+  /* Where the conversation starts depends on who set the interview up.
+   *
+   * A CURATED interview already has its questions written from the CV the
+   * operator supplied, so it goes straight into the call. A SELF-STARTED one
+   * has nothing yet and must pass through Prepare first — skipping it leaves
+   * the panel improvising from a generic bank, which is precisely the failure
+   * this product exists to avoid, and it happens silently. */
+  const talkTo = (it) =>
+    it.curated || it.stage !== "invited"
+      ? `/interview/${encodeURIComponent(it.session_id)}`
+      : `/prepare/${encodeURIComponent(it.session_id)}`;
 
   const start = async () => {
     setStarting(true);
@@ -192,31 +218,50 @@ export default function CandidateHome() {
         {interviews?.length > 0 && (
           <div className="list">
             {interviews.map((it) => {
-              const stage = STAGE[it.stage] || STAGE.invited;
-              const done = it.stage === "complete" || it.status === "ended";
+              const finished = it.stage === "complete" || it.status === "ended";
+              const talkDone = it.stage === "voice_done" || finished;
+              const codeDone = it.stage === "coding_done" || finished;
               return (
-                <button
-                  key={it.session_id}
-                  className="item"
-                  onClick={() => open(it)}
-                  disabled={done}
-                >
+                <div key={it.session_id} className="item static">
                   <div className="top">
                     <span className="title">{it.job_title || "Interview"}</span>
                     <span className="badges">
-                      <span className={`badge ${done ? "ended" : it.status}`}>
-                        {done ? "Completed" : stage.text}
+                      <span className={`badge ${finished ? "ended" : it.status}`}>
+                        {finished ? "Completed" : STAGE[it.stage] || "Not started"}
                       </span>
                     </span>
                   </div>
-                  <span className="meta">
-                    {done
-                      ? "Thank you — the result is with the hiring team."
-                      : stage.next === "Take the coding round"
-                        ? "Coding round outstanding. You can take it whenever suits you."
-                        : `${stage.next}. You will need a microphone.`}
-                  </span>
-                </button>
+
+                  {finished ? (
+                    <span className="meta">
+                      Thank you — the result is with the hiring team.
+                    </span>
+                  ) : (
+                    <>
+                      <span className="meta">
+                        Take these in whichever order suits you. Your progress
+                        is saved, so you can stop and come back.
+                      </span>
+                      <div className="rounds-pick">
+                        <Round
+                          label="The conversation"
+                          hint="About twenty minutes with the panel. You will need a microphone."
+                          done={talkDone}
+                          onOpen={() => navigate(talkTo(it))}
+                        />
+                        {it.coding && (
+                          <Round
+                            label="The coding round"
+                            hint="One problem written from your CV. Ten to fifteen minutes."
+                            done={codeDone}
+                            onOpen={() => navigate(
+                              `/coding/${encodeURIComponent(it.session_id)}`)}
+                          />
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
               );
             })}
           </div>

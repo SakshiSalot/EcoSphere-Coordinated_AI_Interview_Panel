@@ -588,6 +588,12 @@ async def my_interviews(authorization: str = Header(default="")):
             # interview would send them away with a round outstanding.
             "stage": r["stage"],
             "coding": bool(r["coding_json"]),
+            # Curated by an operator, or started by the candidate themselves?
+            # A curated interview already has its questions written from a CV
+            # the operator supplied; a self-started one has nothing yet, and
+            # must go through Prepare or the panel falls back to the generic
+            # bank without anybody noticing.
+            "curated": bool(r["job_id"]),
         }
         for r in db.interviews_for_candidate(caller.user_id)
     ]}
