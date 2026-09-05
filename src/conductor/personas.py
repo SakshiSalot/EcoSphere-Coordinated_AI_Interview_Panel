@@ -188,7 +188,15 @@ def persona_prompt(
     from src.conductor import scenarios as scenario_lib
 
     p = persona(role)
-    parts = [p["prompt"].strip(), BREVITY]
+
+    # BREVITY is suspended inside a role-play. "One sentence, under 25 words"
+    # is right for a question and wrong for stepping into a character: every
+    # scenario opens with two or three sentences of framing, and the two
+    # instructions in one prompt produced a truncated setup nobody could
+    # follow. `in_character` carries its own length guidance instead.
+    parts = [p["prompt"].strip()]
+    if not scenario:
+        parts.append(BREVITY)
 
     if scenario:
         running = scenario_lib.by_id(scenario)

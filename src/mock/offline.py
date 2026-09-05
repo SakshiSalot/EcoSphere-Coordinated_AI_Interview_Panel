@@ -707,6 +707,122 @@ def test_told_two_interviewers_differently() -> None:
               "told" not in same[0].detail, same[0].detail)
 
 
+def test_scenario_is_launched_by_the_conductor() -> None:
+    """The capability that stayed at zero, and why.
+
+    `launch_scenario` is a tool a persona MAY call, and across every live
+    interview it was called exactly zero times — a small model conducting an
+    interview does not also volunteer unrequested tool calls. So the cue is
+    now spotted in ordinary string work and the CONDUCTOR hands the floor to
+    whoever owns the role-play, the same shape as `no_business_framing`.
+    """
+    print("\n\033[1mrole-play is launched by the conductor, not volunteered\033[0m")
+    from src.conductor import scenarios
+    from src.conductor.turn import observe, speak
+
+    panel = ["technical", "product", "behavioural", "hiring_manager"]
+
+    def fresh(name: str) -> "object":
+        s = reset_session(name)
+        s.roles = list(panel)
+        s.floor_holder = "technical"
+        s.max_turns = 14
+        return s
+
+    # --- a cue in the candidate's own words ---
+    session = fresh("t-cue")
+    said = "On the SUMO work we slipped three weeks because I disagreed with my tech lead."
+    turn_id = session.turns.add("candidate", said)
+    observe(session, turn_id, said)
+    check("the candidate's words cue a role-play",
+          session.pending_scenario == "disagree_with_senior",
+          str(session.pending_scenario))
+
+    role, reason = decide_floor(session)
+    check("and the conductor hands the floor to its owner",
+          role == "behavioural" and "role-play" in reason, f"{role} ({reason})")
+
+    speak(session, "behavioural")
+    check("which opens it without any tool call",
+          session.active_scenario == "disagree_with_senior"
+          and session.scenario_owner == "behavioural",
+          str(session.active_scenario))
+    check("and it is marked used, so only one runs per interview",
+          session.scenario_done is True)
+
+    # --- forced, when the candidate never opens a door ---
+    session = fresh("t-forced")
+    dull = "We sharded Postgres by tenant id using a consistent hash ring."
+    for _ in range(8):
+        t = session.turns.add("candidate", dull)
+        observe(session, t, dull)
+        session.turns.add("technical", "Go on.")
+        for x in session.turns.all():
+            x.started_at -= 60.0
+            x.ended_at -= 60.0
+    check("nothing was cued by purely technical answers",
+          session.pending_scenario is None, str(session.pending_scenario))
+    role, reason = decide_floor(session)
+    check("but past halfway the conductor opens one anyway",
+          "role-play" in reason, f"{role} ({reason})")
+
+    # --- and never twice ---
+    session = fresh("t-once")
+    session.scenario_done = True
+    session.turns.add("candidate", "We missed the deadline and I disagreed with my lead.")
+    _, reason = decide_floor(session)
+    check("a second role-play is never launched",
+          "role-play" not in reason, reason)
+
+    # --- more urgent things still win ---
+    session = fresh("t-priority")
+    said = "We missed the deadline and I disagreed with my tech lead about it."
+    t = session.turns.add("candidate", said)
+    observe(session, t, said)
+    session.pending_meta = "repeat"
+    role, reason = decide_floor(session)
+    check("a repeat request still beats a role-play",
+          "repeat" in reason, reason)
+
+    # A rule that fires on almost every answer must not be able to starve the
+    # role-play forever. A live simulation flagged no_business_framing on four
+    # of six answers, and with the role-play below it the floor went to the
+    # product manager every time.
+    session = fresh("t-starve")
+    dull = "We sharded Postgres by tenant id using a consistent hash ring."
+    for _ in range(7):
+        t = session.turns.add("candidate", dull)
+        observe(session, t, dull)
+        session.turns.add("technical", "Go on.")
+        for x in session.turns.all():
+            x.started_at -= 60.0
+            x.ended_at -= 60.0
+    session.flags.add(len(session.turns), "no_business_framing",
+                      "technically sound, no customer", source="heuristic")
+    session.floor_holder = "technical"
+    _, reason = decide_floor(session)
+    check("an overdue role-play is not starved by a rule that always fires",
+          "role-play" in reason, reason)
+
+    # --- the opening turn actually opens ---
+    scenario = scenarios.by_id("slipped_deadline")
+    opening = scenarios.in_character(scenario, 0)
+    check("the opening turn is told to step INTO character",
+          "START A ROLE-PLAY NOW" in opening and scenario.setup[:30] in opening)
+    later = scenarios.in_character(scenario, 2)
+    check("and later turns are told to stay in it",
+          "CURRENTLY IN A ROLE-PLAY" in later)
+
+    # Brevity must not truncate a two-sentence framing line.
+    from src.conductor.personas import persona_prompt
+
+    inside = persona_prompt("behavioural", scenario="slipped_deadline")
+    check("the one-sentence rule is suspended inside a role-play",
+          "under 25 words" not in inside)
+    check("but applies normally outside one",
+          "under 25 words" in persona_prompt("behavioural"))
+
+
 def test_scenarios() -> None:
     print("\n\033[1mrole-play scenarios start, and — the new part — stop\033[0m")
     from src.conductor import scenarios
@@ -1123,6 +1239,7 @@ def main() -> int:
     test_resume_contradiction()
     test_told_two_interviewers_differently()
     test_scenarios()
+    test_scenario_is_launched_by_the_conductor()
     test_difficulty_both_directions()
     test_question_plan()
     test_repeat_request()

@@ -10,7 +10,9 @@ import re
 
 from src.analysis import quick
 from src.conductor import difficulty
-from src.conductor.personas import introduction, persona, persona_prompt
+from src.conductor.personas import (
+    active_roles, introduction, persona, persona_prompt,
+)
 from src.conductor.tools import TOOL_SCHEMAS, handle_tool_call
 from src.gateway import providers
 from src.state.session import SessionState
@@ -198,6 +200,26 @@ def speak(session: SessionState, role: str) -> tuple[str, list[tuple[str, str]]]
             text = introduction(role, first_ever=opening) + text
         return spoken(text), []
 
+    # A role-play the conductor handed to this persona STARTS NOW.
+    #
+    # Activated here rather than left to `launch_scenario`, because that tool
+    # was never called: the model has to notice the opening, decide a role-play
+    # is warranted, and volunteer an unrequested call, all while interviewing.
+    # Setting it before the prompt is built means the persona arrives already
+    # in character and is asked to deliver the opening line, not to decide
+    # whether to.
+    if session.pending_scenario and not session.active_scenario:
+        from src.conductor import scenarios as scenario_lib
+
+        starting = scenario_lib.by_id(session.pending_scenario)
+        if starting is not None and starting.owner == role:
+            session.active_scenario = starting.id
+            session.scenario_owner = role
+            session.scenario_turns = 0
+            session.scenario_done = True   # one per interview, launched or not
+            session.pending_scenario = None
+            log.info("scenario %s opened by %s", starting.id, role)
+
     system = persona_prompt(
         role,
         difficulty=session.difficulty,
@@ -315,7 +337,14 @@ def speak(session: SessionState, role: str) -> tuple[str, list[tuple[str, str]]]
             temperature=0.6,
         )
 
-    text = one_question(spoken(text))
+    # One question per turn — EXCEPT inside a role-play, where the character is
+    # having a conversation rather than asking a question. Trimming at the
+    # first "?" turned "Can I try something? I'm your tech lead. What do you
+    # say to me?" into "Can I try something?", which is an opening nobody can
+    # answer and no way to tell a scenario had begun.
+    text = spoken(text)
+    if not session.active_scenario:
+        text = one_question(text)
 
     # Every persona names itself the first time the candidate hears its voice.
     # Otherwise a new voice simply appears mid-interview and the handoff reads
@@ -411,6 +440,35 @@ def _who_heard_what(session: SessionState, earlier: int, later: int,
     except RuntimeError:
         return detail
     return f"{detail} They told {a} one thing and {b} another."
+
+
+def _check_for_scenario(session: SessionState, text: str) -> None:
+    """Did the candidate just open the door to a role-play?
+
+    THE CONDUCTOR LAUNCHES IT, NOT THE MODEL. `launch_scenario` is a tool a
+    persona may call, and across every live interview it was called exactly
+    zero times — the same failure that made contradiction detection ornamental
+    until it was rebuilt. A small model conducting an interview does not also
+    volunteer unrequested tool calls.
+
+    So the cue is spotted here, in ordinary string work, and the conductor
+    hands the floor to whoever owns that role-play. Identical in shape to
+    `no_business_framing`, which has always worked for exactly this reason.
+
+    Only ever one per interview, and never while one is running.
+    """
+    from src.conductor import scenarios
+
+    if session.scenario_done or session.active_scenario or session.pending_scenario:
+        return
+
+    roles = session.roles or active_roles()
+    match = scenarios.cued_by(text, roles)
+    if match is None:
+        return
+
+    session.pending_scenario = match.id
+    log.info("scenario %s cued by the candidate's answer", match.id)
 
 
 def _check_against_resume(session: SessionState, turn_id: int, text: str) -> None:
@@ -527,6 +585,8 @@ def observe(session: SessionState, turn_id: int, text: str) -> float:
     if vague:
         session.flags.add(turn_id, "vague", why, quote, source="heuristic")
         log.info("flag vague on turn %d: %s", turn_id, why)
+
+    _check_for_scenario(session, text)
 
     # Contradictions, tier one: arithmetic, no model, on the turn it happens.
     #

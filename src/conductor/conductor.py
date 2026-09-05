@@ -89,7 +89,22 @@ def decide_floor(session: SessionState) -> tuple[str, str]:
         if asker in roles:
             return _set(session, asker, "contradiction with an earlier answer", current)
 
-    # 4 — two vague answers in a row: hold and pin them down
+    # 4 — a role-play that is now OVERDUE
+    #
+    # Above the softer rules on purpose. A candidate who never mentions a
+    # customer trips `no_business_framing` on almost every answer, and with the
+    # role-play below it the floor went to the product manager every time and
+    # the scenario never ran — a whole capability starved by a rule that fires
+    # constantly. A cued role-play can wait its turn (rule 7); an overdue one
+    # cannot, because "later" never arrives.
+    if not session.active_scenario and not session.scenario_done:
+        overdue = scenarios.by_id(_overdue_scenario(session, roles) or "")
+        if overdue is not None and overdue.owner in roles:
+            session.pending_scenario = overdue.id
+            return _set(session, overdue.owner,
+                        f"role-play: {overdue.title.lower()}", current)
+
+    # 5 — two vague answers in a row: hold and pin them down
     if session.consecutive_vague() >= 2:
         return _set(session, current, "answer still vague — pinning down", current)
 
@@ -102,12 +117,46 @@ def decide_floor(session: SessionState) -> tuple[str, str]:
             current,
         )
 
-    # 6 — rotate so the panel stays a panel
+    # 7 — a role-play the candidate's own words opened the door to
+    #
+    # Below the urgent rules, and that ordering is the point: a passing mention
+    # of a deadline must not interrupt the panel pinning down an evasive answer
+    # or challenging a contradiction. Those are worth more than a role-play,
+    # and a cue that goes unused this turn is still there next turn.
+    if (not session.active_scenario and not session.scenario_done
+            and session.pending_scenario):
+        cued = scenarios.by_id(session.pending_scenario)
+        if cued is not None and cued.owner in roles:
+            return _set(session, cued.owner,
+                        f"role-play: {cued.title.lower()}", current)
+
+    # 8 — rotate so the panel stays a panel
     if session.consecutive_turns >= MAX_CONSECUTIVE:
         nxt = roles[(roles.index(current) + 1) % len(roles)]
         return _set(session, nxt, "rotating the floor", current)
 
     return _set(session, current, "continuing", current)
+
+
+def _overdue_scenario(session: SessionState, roles: list[str]) -> str | None:
+    """Take an opening once the interview is half over and none has appeared.
+
+    A candidate can talk for twenty minutes without ever mentioning a deadline
+    or a disagreement, and then the panel never demonstrates role-play at all.
+    Slightly abrupt beats absent: the capability is what is being shown, and
+    the scenario still probes something real about them.
+
+    Never before halfway, so a natural cue gets first refusal.
+    """
+    answers = len(session.turns.by_speaker("candidate"))
+    if not session.max_turns or answers < session.max_turns * scenarios.FORCE_AFTER:
+        return None
+    fallback = scenarios.fallback_for(roles)
+    if fallback is None:
+        return None
+    log.info("no role-play was cued by turn %d — opening %s",
+             answers, fallback.id)
+    return fallback.id
 
 
 def _set(session: SessionState, role: str, reason: str, previous: str) -> tuple[str, str]:

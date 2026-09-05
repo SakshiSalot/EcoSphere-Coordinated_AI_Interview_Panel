@@ -41,6 +41,12 @@ class SessionState:
     # floor once this passes the cap, so forgetting to call `end_scenario`
     # cannot silence the rest of the panel for the whole interview.
     scenario_turns: int = 0
+    # A role-play the candidate's own words opened the door to, waiting for its
+    # owner to take the floor. Set by the heuristic, consumed when they speak.
+    pending_scenario: str | None = None
+    # One role-play per interview. Without this the same cue words in a later
+    # answer would launch another, and the interview becomes improv.
+    scenario_done: bool = False
 
     # --- difficulty ---
     difficulty: str = "medium"
