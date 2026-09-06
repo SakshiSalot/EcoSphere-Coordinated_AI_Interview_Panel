@@ -543,6 +543,6 @@ Docker. Everything except Agora runs on a free tier.
 
 ## Build disclosure
 
-Built from scratch between **31 August and 6 September 2026** for the
+Built from scratch for the
 EchoSphere Hackathon. See the commit history. Team Lumina: Harsh Raj (lead),
 Sakshi Salot.
