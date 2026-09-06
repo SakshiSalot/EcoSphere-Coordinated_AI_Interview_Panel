@@ -18,7 +18,6 @@ assessment where every judgement cites a timestamped quote from the transcript.
 | **Arjun** | Product | Users, prioritisation, the cost of being wrong. Challenges technically correct answers that never mention a customer. |
 | **Meera** | Behavioural | Collaboration, conflict, ownership. Runs the role-play scenarios. |
 | **Kavya** | Hiring manager | Scope, ownership, ambiguity — whether you operate at the level the role needs. |
-| **Dev** | Customer | Outcomes in plain language. Says so when you use jargon he does not understand. *(implemented, off the default panel)* |
 
 ---
 
@@ -401,10 +400,10 @@ called out as a small sample rather than quietly ranked.
 
 ## Contradiction detection, and why it needed moving
 
-There was a `flag_contradiction` tool from the start, and it almost never fired.
 Asking a small model to notice a conflict with something said eleven turns ago,
 unprompted, while also conducting an interview, is asking it to do the thing it
-is worst at. It just keeps interviewing.
+is worst at. So the comparison was made narrow and the trigger mechanical, and
+detection does not depend on the model choosing to volunteer anything.
 
 There are **three** things a candidate can contradict:
 
@@ -432,8 +431,9 @@ are verified against the transcript before anything is recorded.
 
 ## Role-play, and why the model does not launch it
 
-Same disease, same cure. `launch_scenario` was a tool a persona *may* call, and
-across every live interview it was called exactly zero times.
+The same principle as contradiction detection. A tool a persona *may* call is
+a request, not a mechanism — a small model conducting an interview will not
+also volunteer an unrequested tool call, so role-play cannot depend on one.
 
 So the conductor launches it. Each scenario declares cue words; a heuristic
 spots them in the candidate's own answer, the conductor hands the floor to the
@@ -441,9 +441,10 @@ persona who owns that role-play, and that persona arrives **already in
 character** rather than being asked to decide to be. If nobody opens a door by
 40% of the way through the interview, one is opened anyway.
 
-The cues are deliberately narrow. `cut` used to match *"we cut p99 latency"* and
-`late` matched *"late-binding"* — one false role-play is worse than several
-missed ones.
+The cues are deliberately narrow — whole words, with stems marked explicitly —
+because one false role-play is worse than several missed ones. An interviewer
+stepping into character for no reason is the single most jarring thing this
+panel could do.
 
 ---
 
@@ -525,19 +526,6 @@ Docker. Everything except Agora runs on a free tier.
 | `Download report` fails | Pango/Cairo missing. Everything else works without it. |
 | `ModuleNotFoundError: libsql` | `pip install -r requirements.txt` — needed once `TURSO_URL` is set. |
 | `401 unauthorized` in the gateway log | `GATEWAY_SHARED_SECRET` mismatch. The same value is used in both places. |
-
----
-
-## Known limitations
-
-- A role-play can hold the floor long enough that the last interviewer never
-  gets a turn. The lock outranks rotation deliberately, but there is no turn
-  budget yet.
-- An accumulated transcript is stripped only when the earlier answer is an exact
-  prefix; a re-recognised word can defeat it.
-- Rubric strictness cannot be normalised without a calibration set.
-- Client-side monitoring cannot be made tamper-proof. The heartbeat makes
-  switching it off *visible*, which is the honest partial answer.
 
 ---
 
