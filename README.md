@@ -1,13 +1,4 @@
----
-title: EchoSphere Interview Panel
-emoji: 🎙️
-colorFrom: indigo
-colorTo: red
-sdk: docker
-app_port: 7860
-pinned: false
-short_description: Coordinated AI interview panel — Team Lumina, PS11
----
+
 
 <!-- The block above is for Hugging Face Spaces, which reads its configuration
      from README front-matter and ignores the rest. Without `sdk: docker` the
