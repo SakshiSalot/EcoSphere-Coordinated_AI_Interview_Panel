@@ -410,7 +410,7 @@ called out as a small sample rather than quietly ranked.
 
 ---
 
-## Contradiction detection, and why it needed moving
+## Contradiction detection, in three kinds
 
 Asking a small model to notice a conflict with something said eleven turns ago,
 unprompted, while also conducting an interview, is asking it to do the thing it
@@ -441,7 +441,7 @@ are verified against the transcript before anything is recorded.
 
 ---
 
-## Role-play, and why the model does not launch it
+## Role-play, and why the conductor launches it
 
 The same principle as contradiction detection. A tool a persona *may* call is
 a request, not a mechanism. A small model conducting an interview will not
