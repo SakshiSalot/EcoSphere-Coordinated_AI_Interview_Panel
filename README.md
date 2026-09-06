@@ -74,17 +74,29 @@ a model, we wrote a service that *pretends to be* a model, and Agora drives it.
                      └───────────────┬────────────────────────┘
                                audio │ ▲ audio
                                      ▼ │
-     ╔═════════════════ AGORA RTC CHANNEL ══════════════════════╗
-     ║   Priya 1001    Arjun 1002    Meera 1003    Kavya 1004   ║
-     ║   one Conversational AI agent per persona, one voice     ║
-     ╚═══════════════════════════╤══════════════════════════════╝
-                                 │
-     Agora handles VAD · barge-in · ASR · turn detection ·
-     LLM invocation · Agora-managed TTS
-                                 │
+     ┌───────────── AGORA RTC CHANNEL ──────────────┐
+     │  transport only: carries audio between the   │
+     │  candidate (uid 2001) and the four agents    │
+     └───────────────────┬──────────────────────────┘
+                   audio │ ▲ audio
+                         ▼ │
+ ╔═══════════ AGORA CONVERSATIONAL AI ENGINE ═══════════════════╗
+ ║                                                              ║
+ ║   FOUR AGENTS, one per persona, each with its own voice:     ║
+ ║     Priya 1001 · Arjun 1002 · Meera 1003 · Kavya 1004        ║
+ ║                                                              ║
+ ║   The Engine owns the whole conversational loop:             ║
+ ║     · VAD and barge-in        · speech recognition           ║
+ ║     · turn detection          · Agora-managed TTS            ║
+ ║     · and it INVOKES THE LLM on every turn                   ║
+ ║                                                              ║
+ ║   `llm.url` ─────────────────────────────┐                   ║
+ ║      points at OUR gateway, not OpenAI   │                   ║
+ ╚══════════════════════════════════════════╪═══════════════════╝
+                                            │
      when the candidate stops speaking, ALL FOUR agents POST an
-     OpenAI-shaped request to OUR gateway, at the same moment
-                                 ▼
+     OpenAI-shaped request to that URL, at the same moment
+                                            ▼
   ┌───────────────────── GATEWAY · FastAPI ─────────────────────┐
   │  POST /v1/{session}/{role}/chat/completions                 │
   │                                                             │
