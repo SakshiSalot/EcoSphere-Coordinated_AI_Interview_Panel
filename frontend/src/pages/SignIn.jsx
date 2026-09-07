@@ -51,6 +51,31 @@ export default function SignIn() {
           </div>
         </div>
 
+        {/* Who this form is for, and who it is not for.
+          *
+          * ABOVE the form, not below it. A reviewer who scrolls straight to the
+          * fields, types a username and lands on an empty candidate dashboard
+          * concludes the product is broken — so the one sentence that prevents
+          * that has to be read before the form, not after it. */}
+        <div className="card roles-note">
+          <p className="small">
+            <b>Candidates:</b> you are in the right place. Choose any username
+            and password below and your account is created on the spot.
+          </p>
+          <p className="small" style={{ marginTop: 8 }}>
+            <b>Operators:</b> accounts are issued, not self-registered. An
+            operator reads every candidate's assessment and records the hiring
+            decision, so the role is granted rather than claimed. Demo
+            credentials are in the{" "}
+            <a
+              href="https://github.com/SakshiSalot/EcoSphere-Coordinated_AI_Interview_Panel#try-the-live-demo"
+              target="_blank" rel="noreferrer"
+            >
+              project README
+            </a>.
+          </p>
+        </div>
+
         <div className="disclosure">
           <span aria-hidden="true">◆</span>
           <div>
@@ -119,32 +144,6 @@ export default function SignIn() {
             </button>
           </div>
         </form>
-
-        {/* Who this form is for, and who it is not for.
-          *
-          * Candidates create an account here; operators cannot, and saying so
-          * plainly is better than letting a reviewer type a username, land on
-          * an empty candidate dashboard, and conclude the product is broken.
-          * The reason is a real access-control decision, so it is worth one
-          * sentence rather than a silent refusal. */}
-        <div className="card roles-note">
-          <p className="small">
-            <b>Candidates:</b> you are in the right place. Choose any username
-            and password above and your account is created on the spot.
-          </p>
-          <p className="small" style={{ marginTop: 8 }}>
-            <b>Operators:</b> accounts are issued, not self-registered. An
-            operator reads every candidate's assessment and records the hiring
-            decision, so the role is granted rather than claimed. Demo
-            credentials are in the{" "}
-            <a
-              href="https://github.com/SakshiSalot/EcoSphere-Coordinated_AI_Interview_Panel#try-the-live-demo"
-              target="_blank" rel="noreferrer"
-            >
-              project README
-            </a>.
-          </p>
-        </div>
 
         <p className="center small muted">
           <a
