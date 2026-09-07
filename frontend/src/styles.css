@@ -733,3 +733,9 @@ button.item:hover:not(:disabled) { border-color: var(--accent); transform: trans
   white-space: nowrap;
 }
 .round.done .go { color: var(--good); font-size: 15px; }
+
+/* Who the sign-in form is for. Quieter than the form itself: it is orientation,
+   not an action, so it must not compete with the Continue button. */
+.roles-note { background: var(--sunk); box-shadow: none; padding: 16px 18px; }
+.roles-note p { color: var(--muted); line-height: 1.55; }
+.roles-note b { color: var(--ink); }

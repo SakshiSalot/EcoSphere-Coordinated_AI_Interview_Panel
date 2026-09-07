@@ -45,7 +45,7 @@ export default function SignIn() {
           <div>
             <h1 style={{ fontSize: 34 }}>Sign in</h1>
             <p className="sub" style={{ marginTop: 8 }}>
-              New here? Choose any username and password — we will create your
+              New here? Choose any username and password and we will create your
               account. After that, use the same ones.
             </p>
           </div>
@@ -120,12 +120,41 @@ export default function SignIn() {
           </div>
         </form>
 
+        {/* Who this form is for, and who it is not for.
+          *
+          * Candidates create an account here; operators cannot, and saying so
+          * plainly is better than letting a reviewer type a username, land on
+          * an empty candidate dashboard, and conclude the product is broken.
+          * The reason is a real access-control decision, so it is worth one
+          * sentence rather than a silent refusal. */}
+        <div className="card roles-note">
+          <p className="small">
+            <b>Candidates:</b> you are in the right place. Choose any username
+            and password above and your account is created on the spot.
+          </p>
+          <p className="small" style={{ marginTop: 8 }}>
+            <b>Operators:</b> accounts are issued, not self-registered. An
+            operator reads every candidate's assessment and records the hiring
+            decision, so the role is granted rather than claimed. Demo
+            credentials are in the{" "}
+            <a
+              href="https://github.com/SakshiSalot/EcoSphere-Coordinated_AI_Interview_Panel#try-the-live-demo"
+              target="_blank" rel="noreferrer"
+            >
+              project README
+            </a>.
+          </p>
+        </div>
+
         <p className="center small muted">
-          Interview operators use the account they were given.{" "}
           <a
-            href="/"
-            onClick={(e) => { e.preventDefault(); navigate("/"); }}
+            href="https://github.com/SakshiSalot/EcoSphere-Coordinated_AI_Interview_Panel"
+            target="_blank" rel="noreferrer"
           >
+            Source on GitHub
+          </a>
+          {" · "}
+          <a href="/" onClick={(e) => { e.preventDefault(); navigate("/"); }}>
             What is this?
           </a>
         </p>
